@@ -1,21 +1,24 @@
 # Murakami Harmonic Analysis Dashboard
 
-A local Streamlit application is planned to review harmonic-voltage distortion spectra from the supplied Excel workbooks and compare them with a user-selected limit series. The authoritative V1 requirements are in [`01_App/Docs/codex_prompt_murakami_harmonics_streamlit_v1_2026-10-02.md`](01_App/Docs/codex_prompt_murakami_harmonics_streamlit_v1_2026-10-02.md).
+The dashboard reviews harmonic-voltage distortion spectra from Excel workbooks, organized by the case mapping and result worksheet names. It can overlay a limit series selected by the user. It does not calculate THD or assign engineering pass/fail conclusions.
 
-The folder currently contains the specification and input/reference files; `01_App/app.py` has not been implemented yet. The setup below prepares the development environment and the local launcher without adding dashboard behavior.
+The detailed V1 requirements are in [`01_App/Docs/codex_prompt_murakami_harmonics_streamlit_v1_2026-10-02.md`](01_App/Docs/codex_prompt_murakami_harmonics_streamlit_v1_2026-10-02.md).
 
 ## Project files
 
-- `01_App/Input_files/` — mapping, IEC limits, and harmonic result workbooks.
-- `Example presentation/` — preliminary results presentation used as project reference material.
-- `01_App/requirements.txt` — runtime packages, also used by Streamlit Cloud.
-- `environment.yml` — reproducible Conda environment, including the test runner.
-- `01_App/run_app.bat` — Windows launcher for the dashboard once `01_App/app.py` is present.
-- `graphify-out/` — generated project map and report for future code navigation.
+- `01_App/app.py` — Streamlit interface and application flow.
+- `01_App/data_loader.py` — workbook discovery and Excel parsing.
+- `01_App/validation.py` — mapping, result, and limit validation.
+- `01_App/plotting.py` — order-aligned data preparation and Plotly figures.
+- `01_App/Input_files/` — mapping, limit, and result workbooks. Replace files here outside the app.
+- `01_App/tests/` — regression and dynamic-harmonic tests.
+- `01_App/requirements.txt` — runtime dependencies, also used by Streamlit Community Cloud.
+- `.streamlit/config.toml` — light theme colors based on the preliminary results presentation.
+- `01_App/run_app.bat` — Windows launcher for the dedicated Conda environment.
 
-## Create and activate the environment
+## Set up the environment
 
-Use Anaconda Prompt (or another shell where `conda` is initialized) from the project root:
+Use Anaconda Prompt (or another shell where Conda is initialized) from the project root:
 
 ```powershell
 conda env create -f environment.yml
@@ -28,24 +31,36 @@ To update an existing environment after dependency changes:
 conda env update -f environment.yml --prune
 ```
 
-The environment uses Python 3.12. Runtime package versions are maintained in `01_App/requirements.txt`; `environment.yml` installs that file and adds `pytest` for development.
+The environment uses Python 3.12. `environment.yml` installs the application requirements and adds `pytest` for development.
 
 ## Run locally
 
-Double-click `01_App/run_app.bat`, or run it from PowerShell:
+Double-click `01_App/run_app.bat`, or run it from PowerShell at the project root:
 
 ```powershell
 & .\01_App\run_app.bat
 ```
 
-The launcher activates the dedicated environment and runs `streamlit run app.py` from `01_App`. It currently reports that `app.py` is missing; implement the application from the specification before expecting a dashboard to launch. If Anaconda is installed outside `%USERPROFILE%\anaconda3`, set `CONDA_ROOT` to its installation directory before running the batch file.
+The launcher activates `murakami-harmonic-analysis-dashboard` and starts the `01_App/app.py` entrypoint from the project root, where the shared Streamlit theme is loaded. If Anaconda is installed outside `%USERPROFILE%\anaconda3`, set `CONDA_ROOT` to its installation directory before running the batch file.
 
-## Validate
+The app discovers files in `01_App/Input_files/` using these filename conventions:
 
-After application code and tests are added, activate the environment and run the focused tests for changed behavior. The full suite can be run from the project root with:
+- exactly one `Cases_description*.xlsx` mapping workbook;
+- any `Limits_*.xlsx` limit workbooks;
+- other `.xlsx` files are result datasets.
+
+Use **Reload input files** after replacing a workbook in that folder. The app does not upload, edit, or delete source workbooks.
+
+## Run checks
+
+From the project root with the dedicated environment active:
 
 ```powershell
 python -m pytest -q
 ```
 
-For input-dependent changes, use the supplied workbooks as regression data and keep the synthetic test for harmonic orders above 50 described in the app specification. No application test suite exists yet.
+Tests use the supplied workbooks as regression fixtures and a synthetic dataset through harmonic order 100. They do not modify the supplied workbooks.
+
+## Streamlit Community Cloud
+
+The app uses paths relative to `01_App`, so its input folder is resolved beside `app.py`. For deployment, choose `01_App/app.py` as the entrypoint and keep the app's `requirements.txt` beside it. Add the three required workbooks to the deployed repository's `01_App/Input_files/` folder. Configure access through the hosting platform; the app has no custom authentication or secrets.

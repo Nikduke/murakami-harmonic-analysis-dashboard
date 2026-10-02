@@ -1,10 +1,10 @@
 @echo off
 setlocal
-cd /d "%~dp0"
+cd /d "%~dp0.."
 
-if not exist "app.py" (
+if not exist "01_App\app.py" (
     echo Murakami Harmonic Analysis Dashboard cannot start because app.py is not present yet.
-    echo Implement the application using Docs\codex_prompt_murakami_harmonics_streamlit_v1_2026-10-02.md.
+    echo Implement the application using 01_App\Docs\codex_prompt_murakami_harmonics_streamlit_v1_2026-10-02.md.
     exit /b 2
 )
 
@@ -22,7 +22,7 @@ if errorlevel 1 (
     exit /b 4
 )
 
-python -m streamlit run app.py %*
+python -m streamlit run 01_App\app.py %*
 set "APP_EXIT_CODE=%ERRORLEVEL%"
 call conda deactivate >nul 2>&1
 exit /b %APP_EXIT_CODE%

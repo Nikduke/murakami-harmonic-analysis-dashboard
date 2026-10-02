@@ -611,6 +611,13 @@ Do not fix it to 50 harmonics.
 
 For many harmonic orders, use sensible automatic ticks so a 2–100 dataset remains readable.
 
+When a limit is selected, provide a `Limit display` choice directly below `Limit series` in the sidebar:
+
+- **Bars:** show a clear vertical limit column at each available harmonic, with adjacent integer-order columns touching, a light red outline, and a red cap. Keep case markers visible over the columns.
+- **Dashes:** show one short, disconnected red horizontal marker at each available harmonic order.
+
+Keep the limit legend entry alone on its own row above the case entries. Put a `Show all harmonic numbers` checkbox in the sidebar beneath the limit controls, available even when no limit is selected. It labels every order present in the selected results; leave automatic sparse ticks as the default because all labels can crowd the axis.
+
 ## 11.3 Plot hover
 
 For case traces, include at least:
