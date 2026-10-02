@@ -117,7 +117,11 @@ def test_synthetic_data_retains_harmonic_100_and_does_not_extend_limit():
     assert max(case_trace.y) == pytest.approx(10.0)
     assert case_trace.mode == "markers"
     assert case_trace.marker.symbol == "circle"
-    assert case_trace.marker.size == 6
+    assert case_trace.marker.size == 8
+    assert case_trace.marker.opacity == pytest.approx(0.72)
+    assert case_trace.hovertemplate == (
+        "<b>%{fullData.name}</b> · %{y:.5g} % · %{customdata}<extra></extra>"
+    )
     assert limit_bars.width == 1.0
     assert limit_bars.marker.line.color == "rgba(255, 0, 0, 0.22)"
     assert limit_bars.showlegend is False
@@ -125,9 +129,13 @@ def test_synthetic_data_retains_harmonic_100_and_does_not_extend_limit():
     assert limit_trace.marker.symbol == "line-ew"
     assert limit_trace.marker.color == "#FF0000"
     assert limit_trace.marker.size == pytest.approx(6.5)
+    assert limit_trace.hovertemplate == (
+        "<b>%{fullData.name}</b> · %{y:.5g} %<extra></extra>"
+    )
     assert limit_trace.legend == "legend2"
     assert figure.layout.legend2.y > figure.layout.legend.y
     assert figure.layout.xaxis.minallowed == 0
+    assert figure.layout.xaxis.unifiedhovertitle.text == "<b>Harmonic order: %{x}</b>"
 
 
 def test_figure_supports_short_limit_dashes_and_all_harmonic_ticks():

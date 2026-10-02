@@ -620,24 +620,15 @@ Keep the limit legend entry alone on its own row above the case entries. Put a `
 
 ## 11.3 Plot hover
 
-For case traces, include at least:
+Use a unified hover header to show the harmonic order once. Keep each case on a compact line containing:
 
 ```text
-Case
-Full case description
-Harmonic order
-Distortion value (%)
+Case code · Distortion value (%) · Full case description
 ```
 
 The full description must come from the mapping workbook.
 
-For the limit trace include:
-
-```text
-Limit name
-Harmonic order
-Limit value (%)
-```
+For the limit trace, show its name and limit value (%) on one line; the harmonic order is already shown in the unified header.
 
 Keep plot legends concise. Use case codes rather than full case descriptions as trace names.
 

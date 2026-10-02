@@ -12,7 +12,7 @@ The selected updates V1, V2, V3, and D1 are implemented. D2 is deferred by the u
 | **D1** | Implemented; visually checked at 1536×864 | Compact the first-screen hierarchy and make dataset/location/reference context easier to scan. |
 | **D2** | Deferred | Improve trace identity in 22-case plots with marker shapes while preserving the palette. |
 
-**Marker balance:** Case markers are 6 px (previously 5 px); red limit ticks are 8 px (previously 10 px). The case chips remain native Streamlit chips, and D2 remains deferred.
+**Marker balance:** Case markers are 8 px at 72% opacity (previously 6 px opaque); red limit ticks are 8 px (previously 10 px). The case chips remain native Streamlit chips, and D2 remains deferred.
 
 ## Runtime map
 

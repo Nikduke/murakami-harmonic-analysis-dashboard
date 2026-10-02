@@ -101,15 +101,13 @@ def build_harmonic_figure(
                 y=data[case_code].tolist(),
                 name=case_code,
                 mode="markers",
-                marker={"size": 6, "symbol": "circle"},
+                marker={"size": 8, "symbol": "circle", "opacity": 0.72},
                 marker_color=CASE_COLORS[index % len(CASE_COLORS)],
                 connectgaps=False,
                 customdata=[description] * len(data),
                 hovertemplate=(
-                    "<b>%{fullData.name}</b><br>"
-                    "%{customdata}<br>"
-                    "Harmonic order: %{x}<br>"
-                    "Distortion: %{y:.5g} %<extra></extra>"
+                    "<b>%{fullData.name}</b> · "
+                    "%{y:.5g} % · %{customdata}<extra></extra>"
                 ),
             )
         )
@@ -129,11 +127,7 @@ def build_harmonic_figure(
                     "line": {"color": LIMIT_COLOR, "width": 1.5},
                 },
                 connectgaps=False,
-                hovertemplate=(
-                    "<b>%{fullData.name}</b><br>"
-                    "Harmonic order: %{x}<br>"
-                    "Limit: %{y:.5g} %<extra></extra>"
-                ),
+                hovertemplate="<b>%{fullData.name}</b> · %{y:.5g} %<extra></extra>",
             )
         )
 
@@ -183,6 +177,7 @@ def build_harmonic_figure(
         x_axis_options.update(tickmode="array", tickvals=orders.tolist())
     else:
         x_axis_options["dtick"] = _nice_tick_step(span)
+    x_axis_options["unifiedhovertitle_text"] = "<b>Harmonic order: %{x}</b>"
     figure.update_xaxes(
         **x_axis_options,
     )
