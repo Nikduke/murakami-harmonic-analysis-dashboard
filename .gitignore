@@ -1,0 +1,54 @@
+# Conda and virtual environments
+.conda/
+.venv/
+venv/
+env/
+
+# Python caches and test artifacts
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+.streamlit/secrets.toml
+secrets.toml
+credentials.json
+**/credentials*.json
+**/token*.json
+*.pem
+*.key
+
+# IDE and operating-system state
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+
+# Build, temporary, and log output
+build/
+dist/
+*.egg-info/
+*.log
+*.tmp
+*.bak
+
+# Graphify stores interpreter and scan-root machine paths here
+graphify-out/.graphify_python
+graphify-out/.graphify_root
+graphify-out/.graphify_detect.json
+graphify-out/.graphify_extract.json
+graphify-out/.graphify_ast.json
+graphify-out/.graphify_semantic*.json
+graphify-out/.graphify_analysis.json
+graphify-out/.graphify_cached.json
+graphify-out/.graphify_uncached.txt
+graphify-out/.graphify_chunk_*.json
+graphify-out/converted/

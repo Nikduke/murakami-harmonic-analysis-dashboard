@@ -1,0 +1,9 @@
+name: murakami-harmonic-analysis-dashboard
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - pip
+  - pytest>=8,<9
+  - pip:
+      - -r 01_App/requirements.txt
