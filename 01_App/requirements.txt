@@ -2,4 +2,5 @@ streamlit==1.64.0
 pandas==2.3.3
 numpy==2.5.3
 plotly==6.9.0
+kaleido==1.4.0
 openpyxl==3.1.5

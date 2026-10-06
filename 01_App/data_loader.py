@@ -3,16 +3,51 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
+from io import BytesIO
+from pathlib import Path, PurePosixPath
+from typing import TypeAlias
+from zipfile import BadZipFile, LargeZipFile, ZipFile
 
 import pandas as pd
 
 
+MAX_ZIP_MEMBERS = 100
+MAX_ZIP_UNCOMPRESSED_BYTES = 100 * 1024 * 1024
+
+
+@dataclass(frozen=True)
+class UploadedWorkbook:
+    """An Excel workbook held in memory for the current Streamlit session."""
+
+    name: str
+    content: bytes
+    archive_name: str | None = None
+    member_path: str | None = None
+
+    @property
+    def stem(self) -> str:
+        return Path(self.name).stem
+
+
+WorkbookSource: TypeAlias = Path | UploadedWorkbook
+
+
 @dataclass(frozen=True)
 class InputFiles:
-    mapping: list[Path]
-    limits: list[Path]
-    results: list[Path]
+    mapping: list[WorkbookSource]
+    limits: list[WorkbookSource]
+    results: list[WorkbookSource]
+
+
+@dataclass(frozen=True)
+class UploadExpansion:
+    """Workbook members and user-facing issues found in the current uploads."""
+
+    workbooks: list[UploadedWorkbook]
+    archive_members: list[tuple[str, list[str]]]
+    archive_errors: list[str]
+    archive_warnings: list[str]
+    duplicate_names: list[str]
 
 
 def _is_blank(value: object) -> bool:
@@ -49,9 +84,155 @@ def discover_input_files(input_dir: Path) -> InputFiles:
     return InputFiles(mapping=mapping, limits=limits, results=results)
 
 
-def load_mapping(path: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
+def expand_uploaded_files(uploads: list[UploadedWorkbook]) -> UploadExpansion:
+    """Expand uploaded ZIP archives into in-memory workbooks without extracting files."""
+    workbooks: list[UploadedWorkbook] = []
+    archive_members: list[tuple[str, list[str]]] = []
+    archive_errors: list[str] = []
+    archive_warnings: list[str] = []
+
+    for upload in uploads:
+        filename = Path(upload.name).name
+        suffix = Path(filename).suffix.casefold()
+        if suffix == ".xlsx":
+            if not filename.startswith("~$"):
+                workbooks.append(UploadedWorkbook(name=filename, content=upload.content))
+            continue
+        if suffix != ".zip":
+            continue
+
+        archive_workbooks: list[UploadedWorkbook] = []
+        member_paths: list[str] = []
+        try:
+            with ZipFile(BytesIO(upload.content)) as archive:
+                members = archive.infolist()
+                if len(members) > MAX_ZIP_MEMBERS:
+                    raise ValueError(
+                        f"the archive has {len(members)} entries; the limit is "
+                        f"{MAX_ZIP_MEMBERS}."
+                    )
+                uncompressed_bytes = sum(
+                    member.file_size for member in members if not member.is_dir()
+                )
+                if uncompressed_bytes > MAX_ZIP_UNCOMPRESSED_BYTES:
+                    limit_mib = MAX_ZIP_UNCOMPRESSED_BYTES // (1024 * 1024)
+                    raise ValueError(
+                        f"the archive expands to more than the {limit_mib} MiB limit."
+                    )
+
+                for member in members:
+                    normalized_path = member.filename.replace("\\", "/")
+                    member_path = PurePosixPath(normalized_path)
+                    if (
+                        member.is_dir()
+                        or "__MACOSX" in member_path.parts
+                        or member_path.name.startswith("~$")
+                        or member_path.suffix.casefold() != ".xlsx"
+                    ):
+                        continue
+                    if member.flag_bits & 0x1:
+                        raise ValueError(
+                            f"encrypted workbook `{member_path}` is not supported."
+                        )
+
+                    archive_workbooks.append(
+                        UploadedWorkbook(
+                            name=member_path.name,
+                            content=archive.read(member),
+                            archive_name=filename,
+                            member_path=str(member_path),
+                        )
+                    )
+                    member_paths.append(str(member_path))
+        except (
+            BadZipFile,
+            LargeZipFile,
+            OSError,
+            RuntimeError,
+            NotImplementedError,
+            EOFError,
+            ValueError,
+        ) as exc:
+            archive_errors.append(f"Could not read ZIP archive `{filename}`: {exc}")
+            continue
+
+        archive_members.append((filename, member_paths))
+        workbooks.extend(archive_workbooks)
+        if not archive_workbooks:
+            archive_warnings.append(
+                f"ZIP archive `{filename}` contains no supported `.xlsx` workbooks."
+            )
+
+    by_casefolded_name: dict[str, list[str]] = {}
+    for workbook in workbooks:
+        by_casefolded_name.setdefault(workbook.name.casefold(), []).append(workbook.name)
+    duplicate_names = sorted(
+        values[0]
+        for values in by_casefolded_name.values()
+        if len(values) > 1
+    )
+
+    return UploadExpansion(
+        workbooks=workbooks,
+        archive_members=archive_members,
+        archive_errors=archive_errors,
+        archive_warnings=archive_warnings,
+        duplicate_names=duplicate_names,
+    )
+
+
+def merge_uploaded_workbooks(
+    local_files: InputFiles, uploaded: list[UploadedWorkbook]
+) -> InputFiles:
+    """Add uploaded workbooks, preferring uploads with a matching filename.
+
+    A single uploaded mapping workbook replaces the local mapping workbook(s).
+    Uploaded limits and result workbooks extend their local lists.
+    """
+    valid_uploads = [
+        workbook
+        for workbook in uploaded
+        if workbook.name.casefold().endswith(".xlsx")
+        and not workbook.name.startswith("~$")
+    ]
+    uploaded_mappings = [
+        workbook
+        for workbook in valid_uploads
+        if workbook.name.casefold().startswith("cases_description")
+    ]
+    uploaded_limits = [
+        workbook
+        for workbook in valid_uploads
+        if workbook.name.casefold().startswith("limits_")
+    ]
+    uploaded_results = [
+        workbook
+        for workbook in valid_uploads
+        if workbook not in uploaded_mappings and workbook not in uploaded_limits
+    ]
+
+    def combine(
+        local: list[WorkbookSource], additions: list[WorkbookSource]
+    ) -> list[WorkbookSource]:
+        by_name = {workbook.name.casefold(): workbook for workbook in local}
+        by_name.update({workbook.name.casefold(): workbook for workbook in additions})
+        return sorted(by_name.values(), key=lambda workbook: workbook.name.casefold())
+
+    mapping = uploaded_mappings or local_files.mapping
+    return InputFiles(
+        mapping=combine([], mapping),
+        limits=combine(local_files.limits, uploaded_limits),
+        results=combine(local_files.results, uploaded_results),
+    )
+
+
+def _excel_source(source: Path | bytes):
+    return BytesIO(source) if isinstance(source, bytes) else source
+
+
+def load_mapping(source: Path | bytes) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Read the Cases and Conditions worksheets without rewriting their values."""
-    with pd.ExcelFile(path, engine="openpyxl") as workbook:
+    with pd.ExcelFile(_excel_source(source), engine="openpyxl") as workbook:
         missing_sheets = {"Cases", "Conditions"}.difference(workbook.sheet_names)
         if missing_sheets:
             missing = ", ".join(sorted(missing_sheets))
@@ -68,10 +249,10 @@ def load_mapping(path: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
     return _drop_fully_blank_rows(cases), _drop_fully_blank_rows(conditions)
 
 
-def load_result_workbook(path: Path) -> dict[str, pd.DataFrame]:
+def load_result_workbook(source: Path | bytes) -> dict[str, pd.DataFrame]:
     """Read each result sheet while retaining duplicate case headers for validation."""
     result_sheets: dict[str, pd.DataFrame] = {}
-    with pd.ExcelFile(path, engine="openpyxl") as workbook:
+    with pd.ExcelFile(_excel_source(source), engine="openpyxl") as workbook:
         for sheet_name in workbook.sheet_names:
             raw = pd.read_excel(workbook, sheet_name=sheet_name, header=None, dtype=object)
             if raw.empty:
@@ -87,9 +268,11 @@ def load_result_workbook(path: Path) -> dict[str, pd.DataFrame]:
     return result_sheets
 
 
-def load_limits(path: Path) -> pd.DataFrame:
+def load_limits(source: Path | bytes) -> pd.DataFrame:
     """Parse a limit sheet with one or more rows of headers above its data."""
-    raw = pd.read_excel(path, sheet_name=0, header=None, dtype=object, engine="openpyxl")
+    raw = pd.read_excel(
+        _excel_source(source), sheet_name=0, header=None, dtype=object, engine="openpyxl"
+    )
     if raw.empty:
         raise ValueError("The limit worksheet is empty.")
 

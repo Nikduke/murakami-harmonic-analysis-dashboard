@@ -90,7 +90,7 @@ def validate_mapping(cases: pd.DataFrame, conditions: pd.DataFrame) -> Validatio
         )
         if unknown_groups:
             report.warnings.append(
-                "Unknown case group(s) will not appear in the four dashboard sections: "
+                "Unknown case group(s) will appear only in All, not in the standard group tabs: "
                 + ", ".join(unknown_groups)
                 + "."
             )
@@ -128,7 +128,9 @@ def validate_mapping(cases: pd.DataFrame, conditions: pd.DataFrame) -> Validatio
 
 
 def validate_result(
-    result: pd.DataFrame, mapped_case_codes: set[str], sheet_name: str = "result sheet"
+    result: pd.DataFrame,
+    mapped_case_codes: set[str] | None = None,
+    sheet_name: str = "result sheet",
 ) -> ValidationReport:
     report = ValidationReport()
     if result.empty:
@@ -184,10 +186,15 @@ def validate_result(
                 f"{sheet_name}: case {case_code!s} has {int(invalid_values.sum())} non-numeric result value(s)."
             )
 
-    unmapped_cases = [str(case) for case in case_columns if not _blank(case) and str(case) not in mapped_case_codes]
+    unmapped_cases = (
+        [str(case) for case in case_columns if not _blank(case) and str(case) not in mapped_case_codes]
+        if mapped_case_codes is not None
+        else []
+    )
     if unmapped_cases:
-        report.errors.append(
-            f"{sheet_name}: result case(s) missing from the mapping workbook: "
+        report.warnings.append(
+            f"{sheet_name}: result case(s) missing from the mapping workbook and available under "
+            "Unmapped and All by their exact result codes: "
             + ", ".join(unmapped_cases)
             + "."
         )

@@ -45,9 +45,9 @@ Before changing anything, inspect the repository and any existing `AGENTS.md`, R
 
 Develop and test locally with Streamlit.
 
-Input files are managed **outside the app** by placing/removing/replacing Excel files in `Input_files`.
+Project input files are managed **outside the app** by placing/replacing Excel files in `Input_files`. The current implementation also supports session-only uploads of individual `.xlsx` workbooks and `.zip` bundles; uploads do not change files on disk.
 
-Do **not** build file upload, delete or persistent file-management functionality in V1.
+Do not add persistent file storage or disk-file deletion through the dashboard. Session upload behavior is specified under §10.1.
 
 A simple **Reload input files** control is useful so that during local development the files can be replaced externally and the application refreshed without restarting the full development process.
 
@@ -120,7 +120,15 @@ Harmonic voltage distortion (%)
 
 or a concise equivalent consistent with the supplied data.
 
-Do not calculate a single THD value in V1 unless a future input explicitly defines that requirement and calculation basis.
+Show a separate vertical voltage THD bar chart directly below each case group's harmonic spectrum. Match its plot height to the spectrum and use the same dataset, selected bus/location, and selected cases. Calculate one THD value per case; do not combine a whole group into one value.
+
+For the current result-file convention, each harmonic value is already supplied as a voltage-distortion percentage relative to the fundamental. Calculate THD as the root-sum-square of those percentages for integer harmonic orders 2 through the lesser of order 50 and the highest order in the selected result data:
+
+```text
+THD_U(H) (%) = sqrt(sum(u_h(%)^2)), for h = 2 ... H
+```
+
+Label the chart with the actual included order range, for example `Voltage THD (orders 2–50) (%)`. Keep harmonic-spectrum display dynamic; a result file may contain orders above 50, but those higher orders are outside this defined THD calculation. If any required order row or case value in the THD range is missing, omit that case's THD bar and identify the missing orders rather than treating them as zero. The current limits workbook contains individual harmonic limits, not a THD limit; do not compare the THD bars against those per-order limits or infer an engineering pass/fail result.
 
 The result data values are already supplied in the units required for presentation. Do not rescale them.
 
@@ -368,20 +376,9 @@ No artificial maximum harmonic order should be introduced by the UI or plotting 
 
 ## 7.2 Case columns
 
-Every case column in a result worksheet must be matched against `Cases -> Case number`.
+Match result case codes exactly against `Cases -> Case number`. Do not normalize or "repair" case codes automatically.
 
-The current result workbook has already been corrected so that codes such as:
-
-```text
-A13.1
-A14.1
-```
-
-match the mapping workbook.
-
-Do not attempt to "repair" case codes automatically.
-
-If a result workbook contains an unmapped case code, flag it clearly in input validation rather than guessing the intended mapping.
+If a result workbook contains an unmapped case code, report it as a warning and keep the valid result data available for plotting. Show the exact code under the **Unmapped** and **All** groups; do not infer a group or description. Structural errors in result data, such as duplicate case columns, duplicate harmonic orders, or nonnumeric values, remain blocking errors.
 
 It is acceptable for the mapping workbook to contain future cases that are not present in the currently selected result workbook.
 
@@ -534,7 +531,19 @@ Limit source
 Limit series
 ```
 
-The selected limit is global and can be shown on all visible case-group figures.
+Keep a separate limit-series selection for each busbar/location and restore that location's saved selection when the user returns to it. When a location has no saved choice yet, initialize it from the currently active limit series; after the user changes it, remember that choice for the location. Do not infer a bus-to-voltage-class mapping unless an input workbook explicitly supplies that mapping.
+
+### Chart-set ZIP export
+
+Place **Download charts** in the left **Analysis setup** controls. Open a wide dialog that lets the user select multiple result datasets, then choose locations, groups, and cases separately for each dataset. Select all available result datasets, locations, groups, and cases by default. Put **Select all** and **Clear all** actions in each multi-select dropdown. When **All cases** is cleared, show a case multiselect for each selected group. If multiple locations are selected for one dataset, offer only cases present at every selected location so the case selection stays consistent across those charts.
+
+Use one limit source across the export and choose a separate series for each selected location. A location's selection applies to every selected dataset containing that location. Keep **No limit** available and do not infer which voltage-class curve applies to a bus unless an input workbook explicitly supplies that mapping. Show **Bars**/**Dashes** when at least one location has a limit selected. Put the location and case-group selectors side by side within each dataset section, and arrange per-location limit selectors in two columns for desktop use. Put **Include THD** after the data and limit selections and default it on. Provide **Add CSV case descriptions**, on by default, to control whether each chart group includes its `case_descriptions.csv`. Do not include plotted harmonic data CSVs in the chart-set ZIP; keep the separate per-plot CSV download available below each chart. Provide **Split files into folders**, also on by default.
+
+After the export limit controls, provide the same **Auto y-axis limits** choice and separate fixed spectrum and THD maxima. Initialize these settings from the current live-chart settings when the dialog first opens, then keep export edits independent from the live controls. Retain manual export maxima while Auto is enabled. Apply each fixed maximum consistently to all exported charts of that type, with axes starting at zero. Before preparation, warn if selected values will be clipped by either maximum.
+
+Create one harmonic-spectrum chart for each selected dataset/location/group combination and one vertical per-case THD chart when requested and calculable. When selected, include a `case_descriptions.csv` with `Case` and `Description` columns. With folder splitting on, use `<dataset>/<location>/<group>/`; otherwise include dataset, location, group, and chart type in each file name. Avoid duplicate ZIP member paths when normalized names collide.
+
+Show the selected combination and chart counts before preparation. During preparation, report progress through selection checks, chart rendering, optional case-description CSV creation, and ZIP packaging. Show the final archive size and offer one ZIP download. Generate files in temporary storage and keep the completed archive in the current session only.
 
 ### Reload input files
 
@@ -544,7 +553,13 @@ Provide a small control that:
 - rescans `Input_files`;
 - reruns the app.
 
-This replaces upload/delete management in V1.
+This rescans `Input_files` in addition to session uploads; active session uploads remain in place.
+
+### Session workbook uploads (current implementation)
+
+The sidebar uploader accepts individual `.xlsx` workbooks and `.zip` bundles, including both types in one selection. A ZIP may contain workbooks at its root or in subfolders. Read `.xlsx` members into memory and classify them by their own filenames using the mapping, limit, and result naming conventions; never extract uploaded files to disk. Ignore non-`.xlsx` members, `__MACOSX` entries, and Excel lock files. Show the recognized workbook list and role counts, and retain **Clear uploaded files** to discard session uploads without deleting project files.
+
+Reject invalid or encrypted archives with a clear message. Limit a ZIP to 100 entries and 100 MiB total uncompressed contents. Detect duplicate workbook basenames across the uploaded set and require the user to resolve them before analysis. Preserve the existing behavior for individual workbook uploads: a result workbook is required, mapping and limits are optional, an uploaded mapping replaces the local mapping for the session, and same-name uploads take precedence over local workbooks.
 
 ---
 
@@ -563,14 +578,17 @@ The grouping must come from the `Group` column of the mapping file.
 
 Do not determine group membership from case numbers.
 
-Each group should be an independent Streamlit section or expander and contain:
+Show the four groups as tabs across the top by default. Provide a **Show groups as tabs** sidebar checkbox, on by default, that switches between tabs and vertically stacked group sections. The group selection and case selections must remain available in either layout.
+
+Each group should contain:
 
 - a case multiselect;
 - a Plotly harmonic spectrum;
+- a separate vertical per-case THD bar chart beneath the spectrum, at the same plot height;
 - selected-case descriptions in a compact form;
 - optional CSV download of the currently plotted data.
 
-Allow sections to be collapsed so the page does not become unnecessarily long.
+When the tabs option is off, allow sections to be collapsed so the page does not become unnecessarily long.
 
 ## 11.1 Case selectors
 
@@ -611,12 +629,14 @@ Do not fix it to 50 harmonics.
 
 For many harmonic orders, use sensible automatic ticks so a 2–100 dataset remains readable.
 
+Keep the Plotly canvas white and explicitly set dark text for chart titles, axis titles and tick labels, legends, and THD bar values. Do not rely on text colors inherited from the surrounding Streamlit page theme. Render these figures with `st.plotly_chart(theme=None)` so Streamlit does not replace their explicit styles. The page defaults to the configured light theme, but the charts must remain legible if the page is shown with a user-selected dark theme.
+
 When a limit is selected, provide a `Limit display` choice directly below `Limit series` in the sidebar:
 
 - **Bars:** show a clear vertical limit column at each available harmonic, with adjacent integer-order columns touching, a light red outline, and a red cap. Keep case markers visible over the columns.
 - **Dashes:** show one short, disconnected red horizontal marker at each available harmonic order.
 
-Keep the limit legend entry alone on its own row above the case entries. Put a `Show all harmonic numbers` checkbox in the sidebar beneath the limit controls, available even when no limit is selected. It labels every order present in the selected results; leave automatic sparse ticks as the default because all labels can crowd the axis.
+Keep the limit legend entry alone on its own row above the case entries. After the limit controls, add a divider and put `Auto y-axis limits` as the first control below it, checked by default. When unchecked, show separate editable `Spectrum maximum (%)` and `THD maximum (%)` values. Retain those manual values while Auto is enabled so turning it off restores them. Apply each fixed maximum consistently to every live chart of that type, with both axes starting at zero. Warn when selected values exceed a fixed maximum so users know the chart is clipping data. These display limits must not alter source values or calculations. Place `Show all harmonic numbers` below the y-axis controls, available even when no limit is selected, and checked by default. It labels every order present in the selected results; users can turn it off to use automatic sparse ticks when they prefer a less crowded axis.
 
 ## 11.3 Plot hover
 
@@ -628,7 +648,9 @@ Case code · Distortion value (%) · Full case description
 
 The full description must come from the mapping workbook.
 
-For the limit trace, show its name and limit value (%) on one line; the harmonic order is already shown in the unified header.
+Use one hover-capable scatter trace per case containing its values at all harmonic orders, whether or not a limit is selected. Do not split normal and violating values into separate hover-capable traces: unified hover can then attach a neighboring harmonic's value to the current order and show the case twice. At a hovered order, show each case exactly once, sort case lines by value descending, and color a limit-violating case line dark red. Keep the limit row last and show its red horizontal dash in the hover symbol column, aligned with the case symbols. Do not repeat the dash as a text glyph.
+
+For the limit trace, show its plain series name and limit value (%) together on one line; the harmonic order is already shown in the unified header.
 
 Keep plot legends concise. Use case codes rather than full case descriptions as trace names.
 
@@ -645,6 +667,8 @@ Never assume row number = harmonic order.
 ### Sorting
 
 Plot harmonic orders in ascending numeric order.
+
+Within a unified hover, sort case values in descending order and place the limit line last.
 
 ### Missing limits
 
@@ -688,15 +712,16 @@ Input validation is important. Fail clearly rather than silently producing a mis
 
 Create a compact **Input data status** section or expander.
 
-For valid current inputs it could show information such as:
+For each selected result location, show the result-case count and how many codes match or lack a mapping entry. For example:
 
 ```text
 Mapping file:        Cases_description_UPD.xlsx
 Limit file:          Limits_IEC61000_3_6.xlsx
 Result datasets:     1
 Selected busbars:    3 available
-Mapped cases:        52
-Unmapped cases:      0
+Result cases:        92
+Mapped result codes: 50
+Unmapped result codes: 42 (warning; still plottable)
 ```
 
 Implement validation for at least the following.
@@ -952,8 +977,7 @@ Do not build PDF or PowerPoint report generation in V1.
 
 Do not implement the following unless required to make the defined V1 work:
 
-- file upload through the dashboard;
-- file deletion through the dashboard;
+- persistent upload storage or deletion of project files through the dashboard (session-only `.xlsx` and ZIP uploads are supported as described in §10.1);
 - persistent cloud storage;
 - user accounts;
 - custom passwords;
@@ -962,7 +986,7 @@ Do not implement the following unless required to make the defined V1 work:
 - automated PowerPoint generation;
 - automated report writing;
 - advanced statistical analysis;
-- automatic THD calculation;
+- THD calculations beyond the specifically defined per-case summary above;
 - automatic selection of the "correct" engineering limit;
 - automatic engineering pass/fail conclusions beyond direct numerical comparison;
 - editing the Excel input files from the app;
@@ -1066,7 +1090,7 @@ The V1 is acceptable only when all of the following are true:
 7. A result workbook does not need to contain all three current busbars.
 8. Harmonic orders are read from the source data with no hard-coded maximum.
 9. A synthetic 100th-harmonic test passes.
-10. Case codes match the mapping exactly; unmapped codes are reported.
+10. Case codes match the mapping exactly; unmatched result codes are reported as nonblocking warnings and remain available under **Unmapped** and **All**.
 11. The four figures use the mapping `Group`, not numeric case ranges.
 12. Future A26/A27-type cases can be assigned to any group by editing the mapping file only.
 13. Full case descriptions are available without making the plot legend excessively long.

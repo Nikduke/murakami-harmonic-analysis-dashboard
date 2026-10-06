@@ -40,6 +40,10 @@ dist/
 *.tmp
 *.bak
 
+# Local engineering workbooks are loaded through the app, not committed.
+/01_App/Input_files/*.xlsx
+/01_App/Input_files_*/
+
 # Graphify stores interpreter and scan-root machine paths here
 graphify-out/.graphify_python
 graphify-out/.graphify_root
