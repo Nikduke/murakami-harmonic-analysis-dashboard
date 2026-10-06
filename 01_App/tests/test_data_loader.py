@@ -20,6 +20,7 @@ from data_loader import (
     merge_uploaded_workbooks,
 )
 from plotting import (
+    CASE_COLORS,
     build_group_data,
     build_harmonic_figure,
     build_thd_figure,
@@ -136,16 +137,15 @@ def test_supplied_limit_hover_has_one_correct_entry_per_case():
         order_index = orders.index(5)
         case_value = order_five[trace.name]
         assert trace.y[order_index] == pytest.approx(case_value)
-        assert trace.customdata[order_index] == (
+        assert trace.customdata[order_index][0] == (
             "#C00000" if case_value > order_five_limit else "#20283C"
         )
 
-    assert figure.layout.hovermode == "x unified"
-    assert figure.layout.hoversort == "value descending"
+    assert figure.layout.hovermode == "closest"
+    assert figure.layout.clickmode == "event+select"
     assert figure.data[-1].name == series
     assert figure.data[-1].marker.symbol == "line-ew"
     assert figure.data[-1].marker.color == "#FF0000"
-    assert "─" not in figure.data[-1].hovertemplate
 
 
 def test_harmonic_and_thd_text_colors_are_explicit_on_white_plot_surfaces():
@@ -246,7 +246,7 @@ def test_excel_readers_release_file_handles():
             pd.testing.assert_frame_equal(actual_results[sheet_name], expected_results[sheet_name])
 
 
-def test_limit_hover_row_uses_red_dash_trace_symbol():
+def test_limit_hover_row_is_last_and_uses_aligned_red_dash_symbol():
     data = pd.DataFrame(
         {
             "Harmonic Order": [7],
@@ -260,27 +260,109 @@ def test_limit_hover_row_uses_red_dash_trace_symbol():
         for trace in figure.data
         if trace.name == "Planning Levels" and trace.type == "scatter"
     )
-    limit_hover_trace = next(
-        trace
-        for trace in figure.data
-        if trace.name == "Planning Levels"
-        and trace.type == "scatter"
-        and trace.showlegend is False
-    )
+    case_trace = next(trace for trace in figure.data if trace.name == "A.0")
 
     assert limit_trace.hoverinfo == "skip"
-    assert limit_hover_trace.marker.symbol == "line-ew"
-    assert limit_hover_trace.marker.color == "#FF0000"
-    assert limit_hover_trace.marker.size == pytest.approx(6.5)
-    assert limit_hover_trace.marker.opacity == 0
-    assert limit_hover_trace.marker.line.color == "#FF0000"
-    assert limit_hover_trace.marker.line.width == pytest.approx(1.5)
-    assert limit_hover_trace.y == (0.5,)
-    assert limit_hover_trace.hovertemplate == (
-        "<b>%{fullData.name}</b> · %{customdata:.5g} %<extra></extra>"
+    assert "width:1em;text-align:center;color:#FF0000'>━</span>" in case_trace.hovertemplate
+    assert "<b>Planning Levels</b>" in case_trace.hovertemplate
+    assert case_trace.customdata[0][2] == "4 %"
+    assert case_trace.customdata[0][1] == ""
+    assert "<b>Harmonic order: %{x}</b>" in case_trace.hovertemplate
+    assert figure.layout.hovermode == "closest"
+
+
+def test_hover_shows_point_first_then_only_other_violations_and_limit_last():
+    data = pd.DataFrame(
+        {
+            "Harmonic Order": [5],
+            "A.0": [3.0],
+            "A.1": [6.0],
+            "A.2": [4.5],
+            "A.3": [1.0],
+            limit_column_name("Planning Levels"): [4.0],
+        }
     )
-    assert figure.layout.hovermode == "x unified"
-    assert figure.layout.hoversort == "value descending"
+    descriptions = {
+        "A.0": "Hovered case",
+        "A.1": "Highest violation",
+        "A.2": "Second violation",
+        "A.3": "Within limit",
+    }
+
+    figure = build_harmonic_figure(data, descriptions, "Synthetic test")
+    trace = next(item for item in figure.data if item.name == "A.0")
+    own_text_color, other_cases, limit_row = trace.customdata[0]
+
+    assert own_text_color == "#20283C"
+    assert "A.1 · 6 % · Highest violation" in other_cases
+    assert "A.2 · 4.5 % · Second violation" in other_cases
+    assert "<b>A.1</b>" not in other_cases
+    assert "<b>%{fullData.name}</b>" in trace.hovertemplate
+    assert other_cases.index("A.1") < other_cases.index("A.2")
+    assert "A.0" not in other_cases
+    assert "A.3" not in other_cases
+    assert limit_row == "4 %"
+    assert "color:#4472C4'>●</span>" in trace.hovertemplate
+    assert "<b>Planning Levels</b>" in trace.hovertemplate
+    assert "color:#FF0000'>━</span>" in trace.hovertemplate
+    assert trace.hovertemplate.index("%{y:.5g}") < trace.hovertemplate.index("%{customdata[1]}")
+    assert trace.hovertemplate.index("%{customdata[2]}") > trace.hovertemplate.index("%{customdata[1]}")
+
+    no_limit = build_harmonic_figure(data.drop(columns=[limit_column_name("Planning Levels")]), descriptions, "No limit")
+    no_limit_trace = next(item for item in no_limit.data if item.name == "A.0")
+    assert no_limit_trace.customdata[0][1:] == [""]
+
+
+def test_case_colors_remain_stable_when_selection_is_narrowed():
+    case_order = ["A.0", "A.0.1", "A.1"]
+    harmonic_data = pd.DataFrame(
+        {
+            "Harmonic Order": [2, 3],
+            "A.0": [0.1, 0.2],
+            "A.0.1": [0.3, 0.4],
+            "A.1": [0.5, 0.6],
+        }
+    )
+    full_spectrum = build_harmonic_figure(
+        harmonic_data, {}, "All cases", case_color_order=case_order
+    )
+    focused_spectrum = build_harmonic_figure(
+        harmonic_data[["Harmonic Order", "A.0.1"]],
+        {},
+        "Focused case",
+        case_color_order=case_order,
+    )
+    full_trace = next(trace for trace in full_spectrum.data if trace.name == "A.0.1")
+    focused_trace = next(trace for trace in focused_spectrum.data if trace.name == "A.0.1")
+
+    assert full_trace.marker.color == CASE_COLORS[1]
+    assert focused_trace.marker.color == full_trace.marker.color
+    assert focused_trace.selected.marker.color == full_trace.marker.color
+    assert focused_trace.unselected.marker.color == full_trace.marker.color
+    assert focused_trace.selected.marker.opacity == pytest.approx(0.72)
+    assert focused_trace.unselected.marker.opacity == pytest.approx(0.72)
+
+    thd_data = pd.DataFrame(
+        {
+            "Case": case_order,
+            "Description": ["", "", ""],
+            "THD (%)": [0.2, 0.4, 0.6],
+            "Missing orders": [[], [], []],
+        }
+    )
+    full_thd = build_thd_figure(
+        thd_data, case_order, "All cases", case_color_order=case_order
+    )
+    focused_thd = build_thd_figure(
+        thd_data.loc[thd_data["Case"] == "A.0.1"],
+        ["A.0.1"],
+        "Focused case",
+        case_color_order=case_order,
+    )
+    full_thd_colors = dict(zip(full_thd.data[0].x, full_thd.data[0].marker.color))
+
+    assert full_thd_colors["A.0.1"] == CASE_COLORS[1]
+    assert list(focused_thd.data[0].marker.color) == [full_thd_colors["A.0.1"]]
 
 
 def test_synthetic_data_retains_harmonic_100_and_does_not_extend_limit():
@@ -308,13 +390,6 @@ def test_synthetic_data_retains_harmonic_100_and_does_not_extend_limit():
         for trace in figure.data
         if trace.name == "Selected planning limit" and trace.type == "scatter"
     )
-    limit_hover_trace = next(
-        trace
-        for trace in figure.data
-        if trace.name == "Selected planning limit"
-        and trace.type == "scatter"
-        and trace.showlegend is False
-    )
     limit_bars = next(trace for trace in figure.data if trace.type == "bar")
     assert max(case_trace.x) == 100
     assert max(case_trace.y) == pytest.approx(10.0)
@@ -323,13 +398,21 @@ def test_synthetic_data_retains_harmonic_100_and_does_not_extend_limit():
     assert case_trace.marker.size == 8
     assert case_trace.marker.opacity == pytest.approx(0.72)
     assert case_trace.hovertemplate == (
-        "<span style='color:%{customdata}'><b>%{fullData.name}</b> · "
-        "%{y:.5g} % · %{meta}</span><extra></extra>"
+        "<b>Harmonic order: %{x}</b><br>"
+        "<span style='display:inline-block;width:1em;text-align:center;"
+        "color:#4472C4'>●</span> "
+        "<span style='color:%{customdata[0]}'><b>%{fullData.name}</b> · "
+        "%{y:.5g} % · %{meta}</span>%{customdata[1]}<br>"
+        "<span style='display:inline-block;width:1em;text-align:center;"
+        "color:#FF0000'>━</span> <b>Selected planning limit</b> · "
+        "%{customdata[2]}<extra></extra>"
     )
     assert case_trace.meta == "Future mapped case"
-    assert case_trace.customdata[0] == "#20283C"
-    assert case_trace.customdata[14] == "#C00000"
-    assert case_trace.customdata[-1] == "#20283C"
+    assert case_trace.customdata[0][0] == "#20283C"
+    assert case_trace.customdata[14][0] == "#C00000"
+    assert case_trace.customdata[14][2] == "1.5 %"
+    assert case_trace.customdata[-1][0] == "#20283C"
+    assert case_trace.customdata[-1][2] == "No value at this order"
     assert limit_bars.width == 1.0
     assert limit_bars.marker.color == "rgba(112, 173, 71, 0.08)"
     assert limit_bars.marker.line.color is None
@@ -339,15 +422,11 @@ def test_synthetic_data_retains_harmonic_100_and_does_not_extend_limit():
     assert limit_trace.marker.color == "#FF0000"
     assert limit_trace.marker.size == pytest.approx(6.5)
     assert limit_trace.hoverinfo == "skip"
-    assert limit_hover_trace.marker.size == pytest.approx(6.5)
-    assert limit_hover_trace.marker.opacity == 0
-    assert limit_hover_trace.hovertemplate == (
-        "<b>%{fullData.name}</b> · %{customdata:.5g} %<extra></extra>"
-    )
     assert limit_trace.legend == "legend2"
     assert figure.layout.legend2.y > figure.layout.legend.y
     assert figure.layout.xaxis.minallowed == 0
-    assert figure.layout.xaxis.unifiedhovertitle.text == "<b>Harmonic order: %{x}</b>"
+    assert figure.layout.hovermode == "closest"
+    assert figure.layout.clickmode == "event+select"
 
 
 def test_figure_supports_short_limit_dashes_and_all_harmonic_ticks():

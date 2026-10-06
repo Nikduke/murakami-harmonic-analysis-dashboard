@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from html import escape
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -23,9 +24,18 @@ CASE_COLORS = [
 LIMIT_COLOR = "#FF0000"
 PLOT_TEXT_COLOR = "#20283C"
 VIOLATION_TEXT_COLOR = "#C00000"
+HOVER_VIOLATION_DETAILS_BUDGET = 2 * 1024 * 1024
 THD_MAX_ORDER = 50
 PLOT_HEIGHT = 505
 PLOT_TITLE_LEFT_PADDING = 12
+
+
+def case_colors_for_order(case_order: list[str]) -> dict[str, str]:
+    """Assign palette colors from the full case order so filtering stays stable."""
+    return {
+        case_code: CASE_COLORS[index % len(CASE_COLORS)]
+        for index, case_code in enumerate(case_order)
+    }
 
 
 def limit_column_name(series_name: str) -> str:
@@ -108,16 +118,19 @@ def build_thd_figure(
     selected_cases: list[str],
     title: str,
     y_axis_max: float | None = None,
+    case_color_order: list[str] | None = None,
 ) -> go.Figure:
     """Create a sorted vertical THD bar chart using the case palette."""
     figure = go.Figure()
     plotted = data.loc[data["THD (%)"].notna()].sort_values(
         "THD (%)", ascending=False, kind="stable"
     )
-    color_by_case = {
-        case_code: CASE_COLORS[index % len(CASE_COLORS)]
-        for index, case_code in enumerate(selected_cases)
-    }
+    color_by_case = case_colors_for_order(case_color_order or selected_cases)
+    next_color_index = len(color_by_case)
+    for case_code in selected_cases:
+        if case_code not in color_by_case:
+            color_by_case[case_code] = CASE_COLORS[next_color_index % len(CASE_COLORS)]
+            next_color_index += 1
     if not plotted.empty:
         figure.add_trace(
             go.Bar(
@@ -201,6 +214,7 @@ def build_harmonic_figure(
     limit_display: str = "Bars",
     show_all_harmonic_numbers: bool = False,
     y_axis_max: float | None = None,
+    case_color_order: list[str] | None = None,
 ) -> go.Figure:
     """Create a compact, interactive spectrum figure with source descriptions in hover."""
     figure = go.Figure()
@@ -212,11 +226,62 @@ def build_harmonic_figure(
     x_values = data["Harmonic Order"].tolist() if "Harmonic Order" in data else []
     limit_columns = [column for column in data.columns if str(column).startswith("Limit — ")]
     case_values = data[case_columns].apply(pd.to_numeric, errors="coerce")
-    limit_hover_order = case_values.min(axis=1).fillna(0).tolist()
     limit_values = (
         pd.to_numeric(data[limit_columns[0]], errors="coerce")
         if limit_columns
         else None
+    )
+    case_colors = case_colors_for_order(case_color_order or case_columns)
+    next_color_index = len(case_colors)
+    for case_code in case_columns:
+        if case_code not in case_colors:
+            case_colors[case_code] = CASE_COLORS[next_color_index % len(CASE_COLORS)]
+            next_color_index += 1
+    violating_rows: list[list[tuple[str, float, str]]] = [
+        [] for _ in range(len(data))
+    ]
+    limit_hover_values = ["No value at this order"] * len(data)
+    if limit_values is not None:
+        value_rows = case_values.to_numpy()
+        for row_index, limit_value in enumerate(limit_values.to_numpy()):
+            if pd.isna(limit_value):
+                continue
+            for case_index, case_code in enumerate(case_columns):
+                value = value_rows[row_index, case_index]
+                if pd.notna(value) and value > limit_value:
+                    violating_rows[row_index].append(
+                        (
+                            case_code,
+                            float(value),
+                            case_descriptions.get(case_code, ""),
+                        )
+                    )
+            violating_rows[row_index].sort(key=lambda item: item[1], reverse=True)
+            limit_hover_values[row_index] = f"{float(limit_value):.5g} %"
+
+    def _violation_markup(
+        rows: list[tuple[str, float, str]], exclude_case: str | None = None
+    ) -> str:
+        return "".join(
+            "<br><span style='display:inline-block;width:1em;"
+            f"text-align:center;color:{case_colors[other_case]}'>●</span> "
+            f"<span style='color:{VIOLATION_TEXT_COLOR}'>"
+            f"{escape(other_case)} · {other_value:.5g} %"
+            + (f" · {escape(other_description)}" if other_description else "")
+            + "</span>"
+            for other_case, other_value, other_description in rows
+            if other_case != exclude_case
+        )
+
+    repeated_violation_bytes = sum(
+        len(_violation_markup(rows).encode("utf-8")) * len(case_columns)
+        for rows in violating_rows
+    )
+    show_violation_details = repeated_violation_bytes <= HOVER_VIOLATION_DETAILS_BUDGET
+    limit_name = (
+        escape(str(limit_columns[0]).removeprefix("Limit — "))
+        if limit_columns
+        else ""
     )
     if limit_display == "Bars":
         for column in limit_columns:
@@ -232,14 +297,32 @@ def build_harmonic_figure(
                 )
             )
 
-    for index, case_code in enumerate(case_columns):
+    for case_code in case_columns:
         description = case_descriptions.get(case_code, "")
+        case_color = case_colors[case_code]
         hover_template = (
-            "<span style='color:%{customdata}'><b>%{fullData.name}</b> · %{y:.5g} %"
+            "<b>Harmonic order: %{x}</b><br>"
+            "<span style='display:inline-block;width:1em;text-align:center;"
+            f"color:{case_color}'>●</span> "
+            "<span style='color:%{customdata[0]}'><b>%{fullData.name}</b> · %{y:.5g} %"
         )
         if description:
             hover_template += " · %{meta}"
-        hover_template += "</span><extra></extra>"
+        hover_template += "</span>"
+        if show_violation_details:
+            hover_template += "%{customdata[1]}"
+        elif limit_values is not None:
+            hover_template += (
+                "<br><span style='color:#C00000'>Other cases above limit: "
+                "%{customdata[1]}</span>"
+            )
+        if limit_values is not None:
+            hover_template += (
+                "<br><span style='display:inline-block;width:1em;text-align:center;"
+                f"color:{LIMIT_COLOR}'>━</span> <b>{limit_name}</b> · "
+                "%{customdata[2]}"
+            )
+        hover_template += "<extra></extra>"
         values = case_values[case_code]
         violating = (
             values.gt(limit_values).fillna(False)
@@ -250,13 +333,38 @@ def build_harmonic_figure(
             "name": case_code,
             "legendgroup": case_code,
             "mode": "markers",
-            "marker": {"size": 8, "symbol": "circle", "opacity": 0.72},
-            "marker_color": CASE_COLORS[index % len(CASE_COLORS)],
+            "marker": {
+                "size": 8,
+                "symbol": "circle",
+                "opacity": 0.72,
+                "color": case_color,
+            },
+            "selected": {
+                "marker": {"size": 8, "color": case_color, "opacity": 0.72}
+            },
+            "unselected": {
+                "marker": {"size": 8, "color": case_color, "opacity": 0.72}
+            },
             "connectgaps": False,
             "meta": description if description else None,
             "customdata": [
-                VIOLATION_TEXT_COLOR if is_violating else PLOT_TEXT_COLOR
-                for is_violating in violating
+                [
+                    VIOLATION_TEXT_COLOR if is_violating else PLOT_TEXT_COLOR,
+                    (
+                        _violation_markup(violating_rows[row_index], case_code)
+                        if show_violation_details
+                        else sum(
+                            other_case != case_code
+                            for other_case, _, _ in violating_rows[row_index]
+                        )
+                    ),
+                    *(
+                        [limit_hover_values[row_index]]
+                        if limit_values is not None
+                        else []
+                    ),
+                ]
+                for row_index, is_violating in enumerate(violating)
             ],
             "hovertemplate": hover_template,
         }
@@ -287,27 +395,6 @@ def build_harmonic_figure(
                 hoverinfo="skip",
             )
         )
-        figure.add_trace(
-            go.Scatter(
-                x=x_values,
-                y=limit_hover_order,
-                customdata=pd.to_numeric(data[column], errors="coerce").tolist(),
-                name=column.removeprefix("Limit — "),
-                mode="markers",
-                marker={
-                    "size": 6.5,
-                    "symbol": "line-ew",
-                    "color": LIMIT_COLOR,
-                    "opacity": 0,
-                    "line": {"color": LIMIT_COLOR, "width": 1.5},
-                },
-                connectgaps=False,
-                showlegend=False,
-                hovertemplate=(
-                    "<b>%{fullData.name}</b> · %{customdata:.5g} %<extra></extra>"
-                ),
-            )
-        )
 
     orders = pd.to_numeric(data.get("Harmonic Order", pd.Series(dtype=float)), errors="coerce").dropna()
     span = float(orders.max() - orders.min()) if not orders.empty else 0
@@ -324,8 +411,8 @@ def build_harmonic_figure(
         colorway=CASE_COLORS,
         height=PLOT_HEIGHT,
         margin={"l": 66, "r": 18, "t": 48, "b": 125},
-        hovermode="x unified",
-        hoversort="value descending",
+        hovermode="closest",
+        clickmode="event+select",
         hoverlabel={"bgcolor": "white", "font": {"color": PLOT_TEXT_COLOR}},
         legend={
             "orientation": "h",
@@ -363,7 +450,6 @@ def build_harmonic_figure(
         x_axis_options.update(tickmode="array", tickvals=orders.tolist())
     else:
         x_axis_options["dtick"] = _nice_tick_step(span)
-    x_axis_options["unifiedhovertitle_text"] = "<b>Harmonic order: %{x}</b>"
     figure.update_xaxes(
         **x_axis_options,
     )

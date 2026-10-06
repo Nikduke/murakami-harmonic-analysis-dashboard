@@ -535,15 +535,15 @@ Keep a separate limit-series selection for each busbar/location and restore that
 
 ### Chart-set ZIP export
 
-Place **Download charts** in the left **Analysis setup** controls. Open a wide dialog that lets the user select multiple result datasets, then choose locations, groups, and cases separately for each dataset. Select all available result datasets, locations, groups, and cases by default. Put **Select all** and **Clear all** actions in each multi-select dropdown. When **All cases** is cleared, show a case multiselect for each selected group. If multiple locations are selected for one dataset, offer only cases present at every selected location so the case selection stays consistent across those charts.
+Place **Download charts** in the left **Analysis setup** controls. Open a wide dialog with this decision order: **Data to export**, **Chart settings**, **ZIP layout**, and **Review and download**. Start with one short instruction: “Select datasets, then choose locations, groups, and cases.” Let the user select multiple result datasets, then choose locations, groups, and cases separately within each dataset section, in that reading order. Select all available datasets, locations, groups, and cases by default. Put **Select all** and **Clear all** actions in each multi-select dropdown. When **All cases** is cleared, show a case multiselect for each selected group. If multiple locations are selected for one dataset, offer only cases present at every selected location so the case selection stays consistent across those charts. Summarize each dataset section with its selected location, group, and unique case counts. Show each location's parsed result-row count beside its name; derive it from that workbook sheet, never from a fixed bus list. Use dividers between the major sections. Adapt location and case-selector grids to the number of choices, balance partial rows, and avoid leaving one location alone below an otherwise empty row. Keep small related options grouped together instead of stretching them to opposite sides of the wide dialog.
 
-Use one limit source across the export and choose a separate series for each selected location. A location's selection applies to every selected dataset containing that location. Keep **No limit** available and do not infer which voltage-class curve applies to a bus unless an input workbook explicitly supplies that mapping. Show **Bars**/**Dashes** when at least one location has a limit selected. Put the location and case-group selectors side by side within each dataset section, and arrange per-location limit selectors in two columns for desktop use. Put **Include THD** after the data and limit selections and default it on. Provide **Add CSV case descriptions**, on by default, to control whether each chart group includes its `case_descriptions.csv`. Do not include plotted harmonic data CSVs in the chart-set ZIP; keep the separate per-plot CSV download available below each chart. Provide **Split files into folders**, also on by default.
+In **Chart settings**, use one limit source across the export and choose a separate series for each selected location with visible radio-list choices. A location's selection applies to every selected dataset containing that location. Keep **No limit** available and do not infer which voltage-class curve applies to a bus unless an input workbook explicitly supplies that mapping. Arrange per-location limit selectors in balanced rows of up to three columns on desktop; fit the last row to its remaining locations. Show **Bars**/**Dashes** only when at least one location has a limit selected. Group the binary chart options together: **Include THD plots**, on by default, and **Show all harmonic numbers**, on by default. Keep the export harmonic-number setting independent of the live chart controls.
 
-After the export limit controls, provide the same **Auto y-axis limits** choice and separate fixed spectrum and THD maxima. Initialize these settings from the current live-chart settings when the dialog first opens, then keep export edits independent from the live controls. Retain manual export maxima while Auto is enabled. Apply each fixed maximum consistently to all exported charts of that type, with axes starting at zero. Before preparation, warn if selected values will be clipped by either maximum.
+Provide one **Auto y-axis limits** checkbox for the whole ZIP export, on by default. When on, calculate a safe Spectrum maximum and, when THD is included, a THD maximum independently for each dataset from that dataset's selected locations, groups, and cases. Apply each dataset's automatic ranges consistently to its exported locations and groups; keep datasets on separate scales. Start each axis at zero and include selected limit values in the Spectrum range. When Auto y-axis limits is off, show separate Spectrum and (when THD is included) THD maximum inputs inside each dataset's section. Apply those fixed maxima across that dataset's selected locations and groups, with axes starting at zero. Initialize new fixed maxima from the selected export scope rather than copying the live chart's potentially narrower range. Retain the entered export maxima per dataset while Auto y-axis limits is on; keep export settings independent from the live controls. When a fixed maximum clips selected charts, show a compact clipping count and peak value directly below the affected maximum input rather than a full-width warning.
 
-Create one harmonic-spectrum chart for each selected dataset/location/group combination and one vertical per-case THD chart when requested and calculable. When selected, include a `case_descriptions.csv` with `Case` and `Description` columns. With folder splitting on, use `<dataset>/<location>/<group>/`; otherwise include dataset, location, group, and chart type in each file name. Avoid duplicate ZIP member paths when normalized names collide.
+In **ZIP layout**, provide **Add CSV case descriptions**, on by default, when a mapping workbook is loaded. Without mapping, label this option **Add CSV case list** and explain that the CSV's `Description` column will be blank. The option controls whether each chart group includes its `case_descriptions.csv`. Do not include plotted harmonic data CSVs in the chart-set ZIP; keep the separate per-plot CSV download available below each chart. Provide **Organize files into folders**, also on by default, to create `<dataset>/<location>/<group>/`; when off, include dataset, location, group, and chart type in each file name. Avoid duplicate ZIP member paths when normalized names collide.
 
-Show the selected combination and chart counts before preparation. During preparation, report progress through selection checks, chart rendering, optional case-description CSV creation, and ZIP packaging. Show the final archive size and offer one ZIP download. Generate files in temporary storage and keep the completed archive in the current session only.
+Create one harmonic-spectrum chart for each selected dataset/location/group combination and one vertical per-case THD chart when requested and calculable. In **Review and download**, preview the number of chart sets, harmonic spectra, maximum possible THD charts, optional case CSVs, and the ZIP folder layout or flat naming pattern. Explain that THD charts are omitted where the selected group's data are incomplete. Surface validation errors next to **Prepare ZIP**, while keeping the relevant dataset details available in its section. Show preparation progress and status together in one expandable area. Show the final archive size and offer one ZIP download. Generate files in temporary storage and keep the completed archive in the current session only.
 
 ### Reload input files
 
@@ -636,21 +636,25 @@ When a limit is selected, provide a `Limit display` choice directly below `Limit
 - **Bars:** show a clear vertical limit column at each available harmonic, with adjacent integer-order columns touching, a light red outline, and a red cap. Keep case markers visible over the columns.
 - **Dashes:** show one short, disconnected red horizontal marker at each available harmonic order.
 
-Keep the limit legend entry alone on its own row above the case entries. After the limit controls, add a divider and put `Auto y-axis limits` as the first control below it, checked by default. When unchecked, show separate editable `Spectrum maximum (%)` and `THD maximum (%)` values. Retain those manual values while Auto is enabled so turning it off restores them. Apply each fixed maximum consistently to every live chart of that type, with both axes starting at zero. Warn when selected values exceed a fixed maximum so users know the chart is clipping data. These display limits must not alter source values or calculations. Place `Show all harmonic numbers` below the y-axis controls, available even when no limit is selected, and checked by default. It labels every order present in the selected results; users can turn it off to use automatic sparse ticks when they prefer a less crowded axis.
+Keep the limit legend entry alone on its own row above the case entries. After the limit controls, add a divider and put `Auto y-axis limits` as the first control below it, checked by default. When unchecked, show separate editable `Spectrum maximum (%)` and `THD maximum (%)` values. Remember live manual maxima separately for each result dataset, shared across all locations and groups in that dataset. Switching datasets restores that dataset's values. For a dataset without saved maxima, find the highest result value across all valid locations; include each location's selected limit series in the Spectrum maximum, calculate THD from result data, and round each maximum up to the next whole percentage point (with a 1% minimum for empty or zero data). Retain manual values while Auto is enabled so turning it off restores them. Apply each fixed maximum consistently to every live chart of that type, with both axes starting at zero. Warn when selected values exceed a fixed maximum so users know the chart is clipping data. These display limits must not alter source values or calculations. Place `Show all harmonic numbers` below the y-axis controls, available even when no limit is selected, and checked by default. It labels every order present in the selected results; users can turn it off to use automatic sparse ticks when they prefer a less crowded axis.
 
 ## 11.3 Plot hover
 
-Use a unified hover header to show the harmonic order once. Keep each case on a compact line containing:
+Use a closest-point hover so the point under the pointer is always identified first. Show the harmonic order once, then the hovered case on the first row containing:
 
 ```text
 Case code · Distortion value (%) · Full case description
 ```
 
-The full description must come from the mapping workbook.
+The full description must come from the mapping workbook. When a limit is active, show the other cases above that limit at the same harmonic order below the hovered case, sorted by value descending. Omit other cases within the limit. Put the selected limit series and value last, with its red dash aligned in a narrow symbol column with the case dots. If no limit value exists at that order, show `No value at this order`; do not infer or extrapolate a limit.
 
-Use one hover-capable scatter trace per case containing its values at all harmonic orders, whether or not a limit is selected. Do not split normal and violating values into separate hover-capable traces: unified hover can then attach a neighboring harmonic's value to the current order and show the case twice. At a hovered order, show each case exactly once, sort case lines by value descending, and color a limit-violating case line dark red. Keep the limit row last and show its red horizontal dash in the hover symbol column, aligned with the case symbols. Do not repeat the dash as a text glyph.
+Keep one hover-capable scatter trace per case containing its values at all harmonic orders. Do not split normal and violating values into separate hover-capable traces. Color a limit-violating case line dark red.
 
-For the limit trace, show its plain series name and limit value (%) together on one line; the harmonic order is already shown in the unified header.
+For very large hover payloads, keep the pointed case and limit details and show the count of other violations rather than repeating a long list in every point's metadata.
+
+Clicking a case point selects that case in the case multiselect, leaving the case chips available for adding comparison cases. Shift-clicking the selected point clears the native Plotly point selection and restores all cases in that group. Escape and double-click do not clear point selections in the configured single-point selection mode.
+
+Keep each case's palette color stable when the selection is narrowed, including in the harmonic spectrum, THD chart, and selected-case chips. Native Plotly point selection must retain the trace's assigned case color. In the hover, keep the pointed case code bold and other violating case codes in regular weight to distinguish them without adding extra rows.
 
 Keep plot legends concise. Use case codes rather than full case descriptions as trace names.
 
@@ -668,7 +672,7 @@ Never assume row number = harmonic order.
 
 Plot harmonic orders in ascending numeric order.
 
-Within a unified hover, sort case values in descending order and place the limit line last.
+In a hover, sort additional violating cases in descending order and place the limit row last.
 
 ### Missing limits
 
@@ -1099,10 +1103,11 @@ The V1 is acceptable only when all of the following are true:
 16. The current 5th-harmonic regression value for `TSO_BB1 / A.0` is preserved.
 17. Plotly interactive controls work.
 18. The user can select multiple cases within each group.
-19. Input validation is visible and understandable.
-20. The code is structured so data/plot logic is not tied unnecessarily to Streamlit.
-21. The app is ready to be moved to Streamlit Community Cloud without changing path logic.
-22. All automated tests pass.
+19. Clicking a spectrum point selects its case in the case multiselect; clearing the Plotly point selection restores all cases in that group.
+20. Input validation is visible and understandable.
+21. The code is structured so data/plot logic is not tied unnecessarily to Streamlit.
+22. The app is ready to be moved to Streamlit Community Cloud without changing path logic.
+23. All automated tests pass.
 
 ---
 

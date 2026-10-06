@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 from streamlit.testing.v1 import AppTest
 
+import chart_export
 import plotting
 
 
@@ -34,6 +35,11 @@ def _dashboard_with_inputs(initial_state: dict[str, object] | None = None) -> Ap
         )
         app.run()
     return app
+
+
+def _dataset_axis_key(app: AppTest, key: str) -> str:
+    dataset = app.session_state["result_dataset"]
+    return f"{key}::{dataset.name}"
 
 
 def test_display_defaults_override_prior_checkbox_state_after_workbook_upload(monkeypatch):
@@ -75,19 +81,92 @@ def test_display_defaults_override_prior_checkbox_state_after_workbook_upload(mo
 
     app.checkbox(key="auto_y_limits_v4").uncheck().run()
     assert app.checkbox(key="auto_y_limits_v4").value is False
-    assert app.number_input(key="spectrum_y_max_input").value > 0
-    assert app.number_input(key="thd_y_max_input").value > 0
+    spectrum_input_key = _dataset_axis_key(app, "spectrum_y_max_input")
+    thd_input_key = _dataset_axis_key(app, "thd_y_max_input")
+    spectrum_cap_key = _dataset_axis_key(app, "spectrum_y_max_value")
+    thd_cap_key = _dataset_axis_key(app, "thd_y_max_value")
+    assert app.number_input(key=spectrum_input_key).value > 0
+    assert app.number_input(key=thd_input_key).value > 0
     assert list(spectrum_figures[-1].layout.yaxis.range) == [
         0,
-        app.session_state["spectrum_y_max_value"],
+        app.session_state[spectrum_cap_key],
     ]
     assert list(thd_figures[-1].layout.yaxis.range) == [
         0,
-        app.session_state["thd_y_max_value"],
+        app.session_state[thd_cap_key],
     ]
-    app.number_input(key="spectrum_y_max_input").set_value(8.0).run()
+    app.number_input(key=spectrum_input_key).set_value(8.0).run()
     assert list(spectrum_figures[-1].layout.yaxis.range) == [0, 8.0]
     assert app.checkbox(key="show_all_harmonic_numbers_v3").value is True
+    assert not app.exception
+
+
+def test_live_y_axis_maxima_are_remembered_per_dataset(monkeypatch):
+    spectrum_ranges = []
+    thd_ranges = []
+    original_spectrum_builder = plotting.build_harmonic_figure
+    original_thd_builder = plotting.build_thd_figure
+
+    def capture_spectrum(*args, **kwargs):
+        figure = original_spectrum_builder(*args, **kwargs)
+        axis_range = figure.layout.yaxis.range
+        spectrum_ranges.append(axis_range[1] if axis_range else None)
+        return figure
+
+    def capture_thd(*args, **kwargs):
+        figure = original_thd_builder(*args, **kwargs)
+        axis_range = figure.layout.yaxis.range
+        thd_ranges.append(axis_range[1] if axis_range else None)
+        return figure
+
+    monkeypatch.setattr(plotting, "build_harmonic_figure", capture_spectrum)
+    monkeypatch.setattr(plotting, "build_thd_figure", capture_thd)
+    app = _dashboard_with_inputs(
+        {"spectrum_y_max_value": 3.5, "thd_y_max_value": 1.5}
+    )
+    datasets = list(app.radio(key="result_dataset").options)
+    assert len(datasets) >= 2
+    first_dataset_note = next(
+        element.value
+        for element in app.caption
+        if element.value.startswith("Manual maxima saved for")
+    )
+
+    app.checkbox(key="auto_y_limits_v4").uncheck().run()
+    first_spectrum_input = _dataset_axis_key(app, "spectrum_y_max_input")
+    first_thd_input = _dataset_axis_key(app, "thd_y_max_input")
+    assert app.number_input(key=first_spectrum_input).value == 3.5
+    assert app.number_input(key=first_thd_input).value == 1.5
+    app.number_input(key=first_spectrum_input).set_value(4.0).run()
+    app.number_input(key=first_thd_input).set_value(2.0).run()
+    assert spectrum_ranges[-1] == 4.0
+    assert thd_ranges[-1] == 2.0
+
+    app.radio(key="result_dataset").set_value(datasets[1]).run()
+    second_dataset_note = next(
+        element.value
+        for element in app.caption
+        if element.value.startswith("Manual maxima saved for")
+    )
+    assert second_dataset_note != first_dataset_note
+    second_spectrum_input = _dataset_axis_key(app, "spectrum_y_max_input")
+    second_thd_input = _dataset_axis_key(app, "thd_y_max_input")
+    app.number_input(key=second_spectrum_input).set_value(8.0).run()
+    app.number_input(key=second_thd_input).set_value(6.0).run()
+    assert spectrum_ranges[-1] == 8.0
+    assert thd_ranges[-1] == 6.0
+
+    app.radio(key="result_dataset").set_value(datasets[0]).run()
+    assert app.number_input(key=first_spectrum_input).value == 4.0
+    assert app.number_input(key=first_thd_input).value == 2.0
+    assert spectrum_ranges[-1] == 4.0
+    assert thd_ranges[-1] == 2.0
+
+    app.radio(key="result_dataset").set_value(datasets[1]).run()
+    assert app.number_input(key=second_spectrum_input).value == 8.0
+    assert app.number_input(key=second_thd_input).value == 6.0
+    assert spectrum_ranges[-1] == 8.0
+    assert thd_ranges[-1] == 6.0
     assert not app.exception
 
 
@@ -157,13 +236,15 @@ def test_dashboard_startup_and_global_controls():
     assert sidebar_order["limit_display"] < divider_index
     assert divider_index < sidebar_order["auto_y_limits_v4"]
     assert sidebar_order["auto_y_limits_v4"] < sidebar_order["show_all_harmonic_numbers_v3"]
+    spectrum_input_key = _dataset_axis_key(app, "spectrum_y_max_input")
+    thd_input_key = _dataset_axis_key(app, "thd_y_max_input")
     app.radio(key="limit_display").set_value("Dashes").run()
     app.checkbox(key="auto_y_limits_v4").uncheck().run()
-    assert app.number_input(key="spectrum_y_max_input").value > 0
-    assert app.number_input(key="thd_y_max_input").value > 0
-    app.number_input(key="spectrum_y_max_input").set_value(0.000001).run()
+    assert app.number_input(key=spectrum_input_key).value > 0
+    assert app.number_input(key=thd_input_key).value > 0
+    app.number_input(key=spectrum_input_key).set_value(0.000001).run()
     assert any("Spectrum values reach" in element.value for element in app.warning)
-    app.number_input(key="thd_y_max_input").set_value(0.000001).run()
+    app.number_input(key=thd_input_key).set_value(0.000001).run()
     assert any("THD values reach" in element.value for element in app.warning)
     sidebar_children = list(app.sidebar.children.values())
     sidebar_order = {
@@ -171,15 +252,15 @@ def test_dashboard_startup_and_global_controls():
         for index, child in enumerate(sidebar_children)
         if getattr(child, "key", None)
     }
-    assert sidebar_order["auto_y_limits_v4"] < sidebar_order["spectrum_y_max_input"]
-    assert sidebar_order["spectrum_y_max_input"] < sidebar_order["thd_y_max_input"]
-    assert sidebar_order["thd_y_max_input"] < sidebar_order["show_all_harmonic_numbers_v3"]
+    assert sidebar_order["auto_y_limits_v4"] < sidebar_order[spectrum_input_key]
+    assert sidebar_order[spectrum_input_key] < sidebar_order[thd_input_key]
+    assert sidebar_order[thd_input_key] < sidebar_order["show_all_harmonic_numbers_v3"]
     app.checkbox(key="auto_y_limits_v4").check().run()
     assert not app.number_input
     assert not any("Spectrum values reach" in element.value for element in app.warning)
     app.checkbox(key="auto_y_limits_v4").uncheck().run()
-    assert app.number_input(key="spectrum_y_max_input").value == 0.000001
-    assert app.number_input(key="thd_y_max_input").value == 0.000001
+    assert app.number_input(key=spectrum_input_key).value == 0.000001
+    assert app.number_input(key=thd_input_key).value == 0.000001
     assert any("Spectrum values reach" in element.value for element in app.warning)
     assert any("THD values reach" in element.value for element in app.warning)
     app.checkbox(key="show_all_harmonic_numbers_v3").check().run()
@@ -229,7 +310,7 @@ def test_dashboard_startup_and_global_controls():
     app.button(key="open_chart_download").click().run()
     for location in location_options:
         export_limit_key = f"download_limit_series::Limits_IEC61000_3_6.xlsx::{location}"
-        assert app.selectbox(key=export_limit_key).value == assigned_limits[location]
+        assert app.radio(key=export_limit_key).value == assigned_limits[location]
 
 
 def test_live_limit_selection_carries_forward_and_remembers_bus_choices():
@@ -342,9 +423,19 @@ def test_download_dialog_exposes_dataset_case_and_output_controls():
 
     app.button(key="open_chart_download").click().run()
     assert not app.exception
-    assert app.checkbox(key="download_auto_y_limits_v2").value is True
+    assert [element.value for element in app.subheader] == [
+        "Data to export",
+        "Chart settings",
+        "ZIP layout",
+        "Review and download",
+    ]
+    assert app.checkbox(key="download_auto_y_limits_v1").value is True
+    assert len(
+        [widget for widget in app.checkbox if widget.key == "download_auto_y_limits_v1"]
+    ) == 1
+    assert app.checkbox(key="download_show_all_harmonic_numbers").value is True
     for location, expected_series in expected_limits.items():
-        assert app.selectbox(
+        assert app.radio(
             key=f"download_limit_series::Limits_IEC61000_3_6.xlsx::{location}"
         ).value == expected_series
     dataset_selector = app.multiselect(key="download_datasets")
@@ -358,17 +449,30 @@ def test_download_dialog_exposes_dataset_case_and_output_controls():
     dataset_selector = app.multiselect(key="download_datasets")
     assert len(dataset_selector.value) == len(dataset_selector.options) - 2
     assert len(dataset_selector.value) == len(dataset_labels)
+    assert app.checkbox(key="download_include_thd").label == "Include THD plots"
     assert app.checkbox(key="download_include_thd").value is True
     assert app.checkbox(key="download_split_by_folders").value is True
+    assert app.checkbox(key="download_include_case_descriptions").label == "Add CSV case descriptions"
+    assert any(
+        "harmonic spectra" in caption.value and "case-description CSVs" in caption.value
+        for caption in app.caption
+    )
+    assert any(
+        "Folders: dataset / location / group" in caption.value
+        for caption in app.caption
+    )
 
     dataset_name = dataset_selector.value[0].name
     location_key = f"download_locations::{dataset_name}"
     location_selector = app.multiselect(key=location_key)
-    assert location_selector.value == location_selector.options[2:]
+    location_labels = location_selector.options[2:]
+    assert len(location_selector.value) == len(location_labels)
+    assert all(label.endswith(" rows") for label in location_labels)
+    assert [label.rsplit(" — ", 1)[0] for label in location_labels] == location_selector.value
     app.multiselect(key=location_key).set_value([clear_all]).run()
     assert app.multiselect(key=location_key).value == []
     app.multiselect(key=location_key).set_value([select_all]).run()
-    assert app.multiselect(key=location_key).value == app.multiselect(key=location_key).options[2:]
+    assert len(app.multiselect(key=location_key).value) == len(location_labels)
 
     group_key = f"download_groups::{dataset_name}"
     group_selector = app.multiselect(key=group_key)
@@ -403,38 +507,151 @@ def test_download_dialog_exposes_dataset_case_and_output_controls():
     assert app.button(key="prepare_chart_archive").label == "Prepare ZIP"
 
     limit_selectors = [
-        widget for widget in app.selectbox
+        widget for widget in app.radio
         if str(widget.key).startswith("download_limit_series::")
     ]
     if limit_selectors and len(limit_selectors[0].options) > 1:
-        limit_selectors[0].select(limit_selectors[0].options[1]).run()
+        limit_selectors[0].set_value(limit_selectors[0].options[1]).run()
         assert not app.exception
         assert app.radio(key="download_limit_display").value == "Bars"
 
 
-def test_download_y_axis_settings_start_from_live_and_remain_independent():
+def test_download_dialog_labels_csv_as_case_list_without_mapping():
+    result_workbook = next(SAMPLE_INPUT_DIR.glob("Total_distortion_*.xlsx"), None)
+    if result_workbook is None:
+        pytest.skip("Dashboard UI checks need a result workbook in Input_files_2.")
+
+    app = AppTest.from_file(str(APP_PATH), default_timeout=45)
+    app.run()
+    app.file_uploader[0].set_value(
+        [
+            (
+                result_workbook.name,
+                result_workbook.read_bytes(),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        ]
+    )
+    app.run()
+    app.button(key="open_chart_download").click().run()
+
+    csv_option = app.checkbox(key="download_include_case_descriptions")
+    assert csv_option.label == "Add CSV case list"
+    assert csv_option.value is True
+    assert "Description column will be blank" in csv_option.help
+    assert not app.exception
+
+
+def test_download_y_axis_settings_are_export_scoped_and_remain_independent():
     app = _dashboard_with_inputs()
+    datasets = list(app.radio(key="result_dataset").options)
+    assert len(datasets) >= 2
     app.checkbox(key="auto_y_limits_v4").uncheck().run()
-    live_spectrum_max = app.number_input(key="spectrum_y_max_input").value
-    live_thd_max = app.number_input(key="thd_y_max_input").value
+    first_spectrum_key = _dataset_axis_key(app, "spectrum_y_max_input")
+    first_thd_key = _dataset_axis_key(app, "thd_y_max_input")
+    app.number_input(key=first_spectrum_key).set_value(4.0).run()
+    app.number_input(key=first_thd_key).set_value(2.0).run()
+
+    app.radio(key="result_dataset").set_value(datasets[1]).run()
+    second_dataset_name = app.session_state["result_dataset"].name
+    second_spectrum_key = _dataset_axis_key(app, "spectrum_y_max_input")
+    second_thd_key = _dataset_axis_key(app, "thd_y_max_input")
+    app.number_input(key=second_spectrum_key).set_value(8.0).run()
+    app.number_input(key=second_thd_key).set_value(6.0).run()
+    app.radio(key="result_dataset").set_value(datasets[0]).run()
 
     app.button(key="open_chart_download").click().run()
     assert not app.exception
-    assert app.checkbox(key="download_auto_y_limits_v2").value is False
-    assert app.number_input(key="download_spectrum_y_max_input").value == live_spectrum_max
-    assert app.number_input(key="download_thd_y_max_input").value == live_thd_max
+    auto_limits_key = "download_auto_y_limits_v1"
+    assert app.checkbox(key=auto_limits_key).value is True
+    app.checkbox(key=auto_limits_key).uncheck().run()
+    first_download_spectrum_key = _dataset_axis_key(
+        app, "download_spectrum_y_max_input_v2"
+    )
+    first_download_thd_key = _dataset_axis_key(app, "download_thd_y_max_input_v2")
+    second_download_spectrum_key = (
+        f"download_spectrum_y_max_input_v2::{second_dataset_name}"
+    )
+    second_download_thd_key = f"download_thd_y_max_input_v2::{second_dataset_name}"
+    assert app.number_input(key=first_download_spectrum_key).value > 0
+    assert app.number_input(key=first_download_thd_key).value > 0
+    assert app.number_input(key=second_download_spectrum_key).value > 0
+    assert app.number_input(key=second_download_thd_key).value > 0
 
-    app.number_input(key="download_spectrum_y_max_input").set_value(live_spectrum_max + 1).run()
-    assert app.number_input(key="spectrum_y_max_input").value == live_spectrum_max
-    assert app.number_input(key="download_spectrum_y_max_input").value == live_spectrum_max + 1
-    app.checkbox(key="download_auto_y_limits_v2").check().run()
-    assert "download_spectrum_y_max_input" not in [
+    app.number_input(key=first_download_spectrum_key).set_value(5.0).run()
+    assert app.number_input(key=first_spectrum_key).value == 4.0
+    assert app.number_input(key=first_download_spectrum_key).value == 5.0
+    app.number_input(key=second_download_spectrum_key).set_value(0.000001).run()
+    assert (
+        app.session_state[f"spectrum_y_max_value::{second_dataset_name}"] == 8.0
+    )
+    assert any(
+        "Clips" in element.value for element in app.caption
+    )
+
+    app.checkbox(key="download_include_thd").uncheck().run()
+    assert second_download_thd_key not in [widget.key for widget in app.number_input]
+    app.checkbox(key=auto_limits_key).check().run()
+    assert first_download_spectrum_key not in [
         widget.key for widget in app.number_input
     ]
-    app.checkbox(key="download_auto_y_limits_v2").uncheck().run()
-    assert app.number_input(key="download_spectrum_y_max_input").value == live_spectrum_max + 1
-    app.number_input(key="download_spectrum_y_max_input").set_value(0.000001).run()
-    assert any(
-        "The selected maxima crop data in" in element.value for element in app.warning
+    app.checkbox(key=auto_limits_key).uncheck().run()
+    assert app.number_input(key=first_download_spectrum_key).value == 5.0
+    assert app.number_input(key=second_download_spectrum_key).value == 0.000001
+    assert second_download_thd_key not in [widget.key for widget in app.number_input]
+    assert not app.exception
+
+
+def test_download_fit_scale_is_shared_by_groups_within_each_dataset(monkeypatch):
+    exported_items = []
+
+    def capture_archive(items, **_kwargs):
+        exported_items.extend(list(items))
+        return b"test archive", len(exported_items)
+
+    monkeypatch.setattr(chart_export, "build_chart_archive", capture_archive)
+    app = _dashboard_with_inputs()
+    app.checkbox(key="show_all_harmonic_numbers_v3").uncheck().run()
+    app.button(key="open_chart_download").click().run()
+    assert app.checkbox(key="download_show_all_harmonic_numbers").value is True
+    app.button(key="prepare_chart_archive").click().run()
+
+    assert not app.exception
+    assert exported_items
+    assert all(
+        item.spectrum_figure.layout.xaxis.tickmode == "array"
+        for item in exported_items
     )
+    spectrum_ranges: dict[str, set[float]] = {}
+    thd_ranges: dict[str, set[float]] = {}
+    for item in exported_items:
+        spectrum_ranges.setdefault(item.dataset, set()).add(
+            float(item.spectrum_figure.layout.yaxis.range[1])
+        )
+        if item.thd_figure is not None:
+            thd_ranges.setdefault(item.dataset, set()).add(
+                float(item.thd_figure.layout.yaxis.range[1])
+            )
+    assert all(len(ranges) == 1 for ranges in spectrum_ranges.values())
+    assert all(len(ranges) == 1 for ranges in thd_ranges.values())
+
+
+def test_thd_maxima_initialize_when_thd_is_enabled_in_fixed_mode():
+    app = _dashboard_with_inputs()
+    app.button(key="open_chart_download").click().run()
+    app.checkbox(key="download_include_thd").uncheck().run()
+    app.checkbox(key="download_auto_y_limits_v1").uncheck().run()
+    assert not any(
+        widget.key.startswith("download_thd_y_max_input_v2::")
+        for widget in app.number_input
+    )
+
+    app.checkbox(key="download_include_thd").check().run()
+    thd_inputs = [
+        widget
+        for widget in app.number_input
+        if widget.key.startswith("download_thd_y_max_input_v2::")
+    ]
+    assert len(thd_inputs) == len(app.multiselect(key="download_datasets").value)
+    assert all(widget.value > 1 for widget in thd_inputs)
     assert not app.exception

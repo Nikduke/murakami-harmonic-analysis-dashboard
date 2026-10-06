@@ -4,12 +4,15 @@ from __future__ import annotations
 
 from collections import Counter
 from datetime import datetime
+from functools import partial
 import json
+import math
 from pathlib import Path
 
 import pandas as pd
 import streamlit as st
 
+from chart_selection import cases_from_plot_state
 from chart_export import ChartExportItem, build_chart_archive, slug_name
 from data_loader import (
     UploadExpansion,
@@ -29,6 +32,7 @@ from plotting import (
     build_harmonic_figure,
     build_thd_data,
     build_thd_figure,
+    case_colors_for_order,
 )
 from validation import KNOWN_GROUPS, ValidationReport, validate_limits, validate_mapping, validate_result
 
@@ -43,15 +47,16 @@ SELECT_ALL_OPTION = "__dashboard_action_select_all__"
 CLEAR_ALL_OPTION = "__dashboard_action_clear_all__"
 AUTO_Y_LIMITS_KEY = "auto_y_limits_v4"
 SHOW_ALL_HARMONIC_NUMBERS_KEY = "show_all_harmonic_numbers_v3"
+DOWNLOAD_AUTO_Y_LIMITS_KEY = "download_auto_y_limits_v1"
 SPECTRUM_Y_CAP_KEY = "spectrum_y_max_value"
 THD_Y_CAP_KEY = "thd_y_max_value"
 SPECTRUM_Y_INPUT_KEY = "spectrum_y_max_input"
 THD_Y_INPUT_KEY = "thd_y_max_input"
-DOWNLOAD_AUTO_Y_LIMITS_KEY = "download_auto_y_limits_v2"
-DOWNLOAD_SPECTRUM_Y_CAP_KEY = "download_spectrum_y_max_value"
-DOWNLOAD_THD_Y_CAP_KEY = "download_thd_y_max_value"
-DOWNLOAD_SPECTRUM_Y_INPUT_KEY = "download_spectrum_y_max_input"
-DOWNLOAD_THD_Y_INPUT_KEY = "download_thd_y_max_input"
+Y_AXIS_DATASET_STATE_MIGRATED_KEY = "y_axis_dataset_state_migrated_v1"
+DOWNLOAD_SPECTRUM_Y_CAP_KEY = "download_spectrum_y_max_value_v2"
+DOWNLOAD_THD_Y_CAP_KEY = "download_thd_y_max_value_v2"
+DOWNLOAD_SPECTRUM_Y_INPUT_KEY = "download_spectrum_y_max_input_v2"
+DOWNLOAD_THD_Y_INPUT_KEY = "download_thd_y_max_input_v2"
 
 st.set_page_config(
     page_title=APP_NAME,
@@ -112,6 +117,10 @@ def _load_cached(loader, source: WorkbookSource):
     return loader(str(source), stat.st_mtime_ns, stat.st_size)
 
 
+def _dataset_y_axis_key(base_key: str, dataset_name: str) -> str:
+    return f"{base_key}::{dataset_name}"
+
+
 def _reset_analysis_selections() -> None:
     fixed_keys = {
         "result_dataset",
@@ -145,12 +154,16 @@ def _remember_limit_series(
 
 
 def _ensure_positive_number_state(
-    state_key: str, legacy_key: str, default: float
+    state_key: str, legacy_key: str | None, default: float
 ) -> None:
     if state_key in st.session_state:
         return
     try:
-        value = float(st.session_state.get(legacy_key, default))
+        value = float(
+            st.session_state.get(legacy_key, default)
+            if legacy_key is not None
+            else default
+        )
     except (TypeError, ValueError):
         value = default
     if pd.isna(value) or value <= 0:
@@ -197,6 +210,62 @@ def _suggested_y_axis_max(maximum: float) -> float:
     return max(float(maximum) * 1.15, 0.001)
 
 
+def _dataset_y_axis_maxima(
+    result_sheets: dict[str, pd.DataFrame],
+    locations: list[str],
+    mapped_case_codes: set[str] | None,
+    limits: pd.DataFrame | None,
+    limit_series_by_location: dict[str, str],
+) -> tuple[float, float]:
+    spectrum_maximum = 0.0
+    thd_maximum = 0.0
+    valid_location_count = 0
+    for location in locations or list(result_sheets):
+        result_data = result_sheets[location]
+        if validate_result(result_data, mapped_case_codes, location).errors:
+            continue
+        case_codes = [str(column) for column in result_data.columns[1:]]
+        selected_series = limit_series_by_location.get(location, "No limit")
+        group_data = build_group_data(
+            result_data,
+            case_codes,
+            limits=limits if selected_series != "No limit" else None,
+            limit_series=selected_series if selected_series != "No limit" else None,
+        )
+        thd_data, _ = build_thd_data(group_data, {})
+        spectrum_maximum = max(spectrum_maximum, _max_numeric_value(group_data))
+        thd_maximum = max(thd_maximum, _max_numeric_value(thd_data["THD (%)"]))
+        valid_location_count += 1
+    if not valid_location_count:
+        return 1.0, 1.0
+    return spectrum_maximum, thd_maximum
+
+
+def _integer_y_axis_max(maximum: float) -> float:
+    """Round live manual-axis defaults up to a whole percentage point."""
+    return max(float(math.ceil(float(maximum))), 1.0)
+
+
+def _suggested_dataset_y_axis_maxima(
+    result_sheets: dict[str, pd.DataFrame],
+    locations: list[str],
+    mapped_case_codes: set[str] | None,
+    limits: pd.DataFrame | None,
+    limit_series_by_location: dict[str, str],
+) -> tuple[float, float]:
+    spectrum_maximum, thd_maximum = _dataset_y_axis_maxima(
+        result_sheets,
+        locations,
+        mapped_case_codes,
+        limits,
+        limit_series_by_location,
+    )
+    return (
+        _suggested_y_axis_max(spectrum_maximum),
+        _suggested_y_axis_max(thd_maximum),
+    )
+
+
 def _y_axis_input_step(value: float) -> float:
     return max(abs(float(value)) * 0.05, 0.0001)
 
@@ -215,6 +284,26 @@ def _handle_case_dropdown_action(
         selected = [case for case in selected if case in available_cases]
     st.session_state[case_key] = selected
     st.session_state[selection_key] = selected.copy()
+
+
+def _handle_spectrum_point_selection(
+    chart_key: str,
+    case_key: str,
+    selection_key: str,
+    available_cases: list[str],
+    trace_case_codes: dict[int, str],
+) -> None:
+    chart_state = st.session_state.get(chart_key)
+    if chart_state is None:
+        return
+
+    selected_cases = cases_from_plot_state(
+        chart_state, available_cases, trace_case_codes
+    )
+    if selected_cases is None:
+        return
+    st.session_state[case_key] = selected_cases
+    st.session_state[selection_key] = selected_cases.copy()
 
 
 def _handle_multiselect_dropdown_action(
@@ -300,6 +389,12 @@ def _case_option_label(value: str) -> str:
     return value
 
 
+def _location_option_label(value: str, result_sheets: dict[str, pd.DataFrame]) -> str:
+    if value in {SELECT_ALL_OPTION, CLEAR_ALL_OPTION}:
+        return _case_option_label(value)
+    return f"{value} — {len(result_sheets[value])} rows"
+
+
 def _dropdown_option_label(value: object) -> str:
     if value == SELECT_ALL_OPTION:
         return "Select all"
@@ -355,11 +450,20 @@ def _result_dataset_option_label(value: object, labels: dict[str, str]) -> str:
     return labels.get(name, name)
 
 
-def _case_chip_styles(container_key: str, selected_cases: list[str]) -> str:
-    """Tint selected case chips with the same palette order used by the plots."""
+def _case_chip_styles(
+    container_key: str,
+    selected_cases: list[str],
+    case_color_order: list[str],
+) -> str:
+    """Tint case chips with their stable palette colors."""
     rules = []
-    for index, _case_code in enumerate(selected_cases):
-        color = CASE_COLORS[index % len(CASE_COLORS)]
+    color_by_case = case_colors_for_order(case_color_order)
+    next_color_index = len(color_by_case)
+    for index, case_code in enumerate(selected_cases):
+        color = color_by_case.get(case_code)
+        if color is None:
+            color = CASE_COLORS[next_color_index % len(CASE_COLORS)]
+            next_color_index += 1
         channels = tuple(int(color[offset : offset + 2], 16) for offset in (1, 3, 5))
         tint = "#" + "".join(
             f"{round(channel * 0.16 + 255 * 0.84):02X}" for channel in channels
@@ -598,6 +702,43 @@ with st.sidebar:
             ),
             key="result_dataset",
         )
+live_spectrum_y_cap_key = _dataset_y_axis_key(
+    SPECTRUM_Y_CAP_KEY, selected_dataset.name
+)
+live_thd_y_cap_key = _dataset_y_axis_key(THD_Y_CAP_KEY, selected_dataset.name)
+live_spectrum_y_input_key = _dataset_y_axis_key(
+    SPECTRUM_Y_INPUT_KEY, selected_dataset.name
+)
+live_thd_y_input_key = _dataset_y_axis_key(THD_Y_INPUT_KEY, selected_dataset.name)
+if not st.session_state.get(Y_AXIS_DATASET_STATE_MIGRATED_KEY):
+    for old_cap_key, old_input_key, old_legacy_key, dataset_cap_key in (
+        (
+            SPECTRUM_Y_CAP_KEY,
+            SPECTRUM_Y_INPUT_KEY,
+            "spectrum_y_max",
+            live_spectrum_y_cap_key,
+        ),
+        (THD_Y_CAP_KEY, THD_Y_INPUT_KEY, "thd_y_max", live_thd_y_cap_key),
+    ):
+        if dataset_cap_key not in st.session_state:
+            old_value = st.session_state.get(
+                old_cap_key,
+                st.session_state.get(
+                    old_input_key, st.session_state.get(old_legacy_key)
+                ),
+            )
+            if old_value is not None:
+                st.session_state[dataset_cap_key] = old_value
+    st.session_state[Y_AXIS_DATASET_STATE_MIGRATED_KEY] = True
+    for old_key in (
+        SPECTRUM_Y_CAP_KEY,
+        THD_Y_CAP_KEY,
+        SPECTRUM_Y_INPUT_KEY,
+        THD_Y_INPUT_KEY,
+        "spectrum_y_max",
+        "thd_y_max",
+    ):
+        st.session_state.pop(old_key, None)
 recognized_conditions = matched_conditions(selected_dataset.name, conditions)
 
 try:
@@ -739,63 +880,151 @@ with st.sidebar:
         if selected_limit != "No limit"
         else "Bars"
     )
+    live_y_axis_default_version_key = _dataset_y_axis_key(
+        "live_y_axis_default_version", selected_dataset.name
+    )
     if (
-        SPECTRUM_Y_CAP_KEY not in st.session_state
-        or THD_Y_CAP_KEY not in st.session_state
+        st.session_state.get(live_y_axis_default_version_key) != "whole-percent-v1"
+        or live_spectrum_y_cap_key not in st.session_state
+        or live_thd_y_cap_key not in st.session_state
     ):
-        if result_reports[selected_location].is_valid:
-            axis_seed_data = build_group_data(
-                result_sheets[selected_location],
-                [str(column) for column in result_sheets[selected_location].columns[1:]],
-                limits=limits if selected_limit != "No limit" else None,
-                limit_series=selected_limit if selected_limit != "No limit" else None,
+        limit_series_by_location = {}
+        for location in location_options:
+            if not selected_limit_file:
+                limit_series_by_location[location] = "No limit"
+                continue
+            location_selection_key = (
+                f"limit_series_selection::{selected_limit_file.name}::{location}"
             )
-            seed_thd_data, _ = build_thd_data(axis_seed_data, {})
-            spectrum_seed = _max_numeric_value(axis_seed_data)
-            thd_seed = _max_numeric_value(seed_thd_data["THD (%)"])
-        else:
-            spectrum_seed = thd_seed = 1.0
-        _ensure_positive_number_state(
-            SPECTRUM_Y_CAP_KEY,
-            "spectrum_y_max",
-            _suggested_y_axis_max(spectrum_seed),
+            location_explicit_key = (
+                f"limit_series_explicit::{selected_limit_file.name}::{location}"
+            )
+            remembered_series = st.session_state.get(location_selection_key)
+            has_legacy_series = (
+                remembered_series in limit_options
+                and remembered_series != "No limit"
+                and location_explicit_key not in st.session_state
+            )
+            if (
+                remembered_series in limit_options
+                and (
+                    st.session_state.get(location_explicit_key)
+                    or has_legacy_series
+                )
+            ):
+                limit_series_by_location[location] = remembered_series
+            else:
+                limit_series_by_location[location] = selected_limit
+        spectrum_seed, thd_seed = _dataset_y_axis_maxima(
+            result_sheets,
+            location_options,
+            mapped_case_codes if files.mapping else None,
+            limits,
+            limit_series_by_location,
         )
-        _ensure_positive_number_state(
-            THD_Y_CAP_KEY,
-            "thd_y_max",
-            _suggested_y_axis_max(thd_seed),
+        legacy_defaults_by_cap = {
+            live_spectrum_y_cap_key: [],
+            live_thd_y_cap_key: [],
+        }
+        for location in location_options:
+            location_spectrum, location_thd = _dataset_y_axis_maxima(
+                {location: result_sheets[location]},
+                [location],
+                mapped_case_codes if files.mapping else None,
+                limits,
+                {location: limit_series_by_location[location]},
+            )
+            legacy_defaults_by_cap[live_spectrum_y_cap_key].append(
+                _suggested_y_axis_max(location_spectrum)
+            )
+            legacy_defaults_by_cap[live_thd_y_cap_key].append(
+                _suggested_y_axis_max(location_thd)
+            )
+        defaults = (
+            (
+                live_spectrum_y_cap_key,
+                live_spectrum_y_input_key,
+                spectrum_seed,
+            ),
+            (live_thd_y_cap_key, live_thd_y_input_key, thd_seed),
         )
+        for cap_key, input_key, raw_maximum in defaults:
+            rounded_default = _integer_y_axis_max(raw_maximum)
+            previous_defaults = legacy_defaults_by_cap[cap_key]
+            current_value = st.session_state.get(cap_key)
+            replace_previous_default = current_value is None
+            if current_value is not None and st.session_state.get(
+                live_y_axis_default_version_key
+            ) != "whole-percent-v1":
+                try:
+                    replace_previous_default = any(
+                        math.isclose(
+                            float(current_value),
+                            previous_default,
+                            rel_tol=1e-5,
+                            abs_tol=1e-8,
+                        )
+                        for previous_default in previous_defaults
+                    )
+                except (TypeError, ValueError):
+                    replace_previous_default = False
+            if replace_previous_default:
+                st.session_state[cap_key] = rounded_default
+            previous_input = st.session_state.get(input_key)
+            if previous_input is not None:
+                try:
+                    if any(
+                        math.isclose(
+                            float(previous_input),
+                            previous_default,
+                            rel_tol=1e-5,
+                            abs_tol=1e-8,
+                        )
+                        for previous_default in previous_defaults
+                    ):
+                        st.session_state[input_key] = rounded_default
+                except (TypeError, ValueError):
+                    pass
+        st.session_state[live_y_axis_default_version_key] = "whole-percent-v1"
     st.divider()
     auto_y_limits = st.checkbox(
         "Auto y-axis limits",
         value=True,
         key=AUTO_Y_LIMITS_KEY,
-        help="Use automatic y-axis ranges, or set fixed maxima shared across all charts of each type.",
+        help=(
+            "Auto fits each chart. When off, set separate Spectrum and THD maxima; "
+            "manual values are remembered per result dataset."
+        ),
     )
     if not auto_y_limits:
-        st.caption("Values above a fixed maximum are clipped. Spectrum and THD use separate maxima.")
+        st.caption("Values above these maxima are clipped.")
         st.session_state.setdefault(
-            SPECTRUM_Y_INPUT_KEY, st.session_state[SPECTRUM_Y_CAP_KEY]
+            live_spectrum_y_input_key,
+            st.session_state[live_spectrum_y_cap_key],
         )
         st.number_input(
             "Spectrum maximum (%)",
             min_value=0.000001,
-            step=_y_axis_input_step(st.session_state[SPECTRUM_Y_CAP_KEY]),
+            step=_y_axis_input_step(st.session_state[live_spectrum_y_cap_key]),
             format="%.6g",
-            key=SPECTRUM_Y_INPUT_KEY,
+            key=live_spectrum_y_input_key,
         )
-        st.session_state[SPECTRUM_Y_CAP_KEY] = st.session_state[
-            SPECTRUM_Y_INPUT_KEY
+        st.session_state[live_spectrum_y_cap_key] = st.session_state[
+            live_spectrum_y_input_key
         ]
-        st.session_state.setdefault(THD_Y_INPUT_KEY, st.session_state[THD_Y_CAP_KEY])
+        st.session_state.setdefault(
+            live_thd_y_input_key, st.session_state[live_thd_y_cap_key]
+        )
         st.number_input(
             "THD maximum (%)",
             min_value=0.000001,
-            step=_y_axis_input_step(st.session_state[THD_Y_CAP_KEY]),
+            step=_y_axis_input_step(st.session_state[live_thd_y_cap_key]),
             format="%.6g",
-            key=THD_Y_INPUT_KEY,
+            key=live_thd_y_input_key,
         )
-        st.session_state[THD_Y_CAP_KEY] = st.session_state[THD_Y_INPUT_KEY]
+        st.session_state[live_thd_y_cap_key] = st.session_state[
+            live_thd_y_input_key
+        ]
     show_all_harmonic_numbers = st.checkbox(
         "Show all harmonic numbers",
         value=True,
@@ -1001,24 +1230,8 @@ else:
     on_dismiss=_close_chart_download_dialog,
 )
 def render_chart_download_dialog() -> None:
-    st.session_state.setdefault(
-        DOWNLOAD_AUTO_Y_LIMITS_KEY,
-        st.session_state.get(AUTO_Y_LIMITS_KEY, True),
-    )
-    _ensure_positive_number_state(
-        DOWNLOAD_SPECTRUM_Y_CAP_KEY,
-        "download_spectrum_y_max",
-        st.session_state[SPECTRUM_Y_CAP_KEY],
-    )
-    _ensure_positive_number_state(
-        DOWNLOAD_THD_Y_CAP_KEY,
-        "download_thd_y_max",
-        st.session_state[THD_Y_CAP_KEY],
-    )
-    st.caption(
-        "Choose result datasets, locations, groups, and cases. Each selected "
-        "dataset/location/group becomes one spectrum chart."
-    )
+    st.subheader("Data to export")
+    st.caption("Select datasets, then choose locations, groups, and cases.")
     dataset_options = files.results
     dataset_key = "download_datasets"
     if dataset_key in st.session_state:
@@ -1049,71 +1262,169 @@ def render_chart_download_dialog() -> None:
     if not selected_datasets:
         st.info("Select at least one result dataset to prepare a chart set.")
         return
-
+    st.markdown("**Y-axis limits**")
+    st.caption(
+        "Auto applies to the whole ZIP. Turn it off to set maxima inside each dataset section."
+    )
+    download_auto_y_limits = st.checkbox(
+        "Auto y-axis limits",
+        value=True,
+        key=DOWNLOAD_AUTO_Y_LIMITS_KEY,
+        help=(
+            "Fit the full selected export automatically. Clear this to set fixed maxima "
+            "for each dataset below."
+        ),
+    )
+    st.divider()
     locations_by_dataset: dict[str, list[str]] = {}
     result_sheets_by_dataset: dict[str, dict[str, pd.DataFrame]] = {}
     groups_by_dataset: dict[str, dict[str, list[str]]] = {}
     selected_groups_by_dataset: dict[str, list[str]] = {}
     case_selections_by_dataset: dict[str, dict[str, list[str]]] = {}
+    dataset_y_axis_slots: dict[str, object] = {}
     invalid_selected_locations: list[str] = []
+    validation_messages: list[str] = []
 
-    st.markdown("**Dataset locations and case selection**")
+    st.markdown("**Locations and cases**")
     for dataset in selected_datasets:
-        with st.expander(
-            result_dataset_labels[dataset.name],
-            expanded=(dataset == selected_dataset),
+        dataset_conditions = matched_conditions(dataset.name, conditions)
+        try:
+            dataset_sheets = _load_cached(_cached_results, dataset)
+        except Exception as exc:
+            invalid_selected_locations.append(dataset.name)
+            with st.expander(
+                f"{result_dataset_labels[dataset.name]} | result unavailable",
+                expanded=True,
+            ):
+                if dataset_conditions:
+                    st.caption(
+                        " | ".join(
+                            f"{token} - {description}"
+                            for token, description in dataset_conditions
+                        )
+                    )
+                st.error(f"Could not read `{dataset.name}`: {exc}")
+                dataset_y_axis_slots[dataset.name] = st.empty()
+            validation_messages.append(f"{dataset.name}: result workbook could not be read.")
+            continue
+        result_sheets_by_dataset[dataset.name] = dataset_sheets
+        if not dataset_sheets:
+            invalid_selected_locations.append(dataset.name)
+            with st.expander(
+                f"{result_dataset_labels[dataset.name]} | no worksheets",
+                expanded=True,
+            ):
+                if dataset_conditions:
+                    st.caption(
+                        " | ".join(
+                            f"{token} - {description}"
+                            for token, description in dataset_conditions
+                        )
+                    )
+                st.error(f"`{dataset.name}` contains no worksheets.")
+                dataset_y_axis_slots[dataset.name] = st.empty()
+            validation_messages.append(f"{dataset.name}: workbook contains no worksheets.")
+            continue
+
+        location_options = list(dataset_sheets)
+        location_key = f"download_locations::{dataset.name}"
+        stored_locations = st.session_state.get(location_key, location_options)
+        selected_locations_for_summary = [
+            location for location in stored_locations if location in location_options
+        ]
+        if location_key in st.session_state and selected_locations_for_summary != stored_locations:
+            st.session_state[location_key] = selected_locations_for_summary
+
+        group_cases = _export_group_cases(
+            dataset_sheets,
+            selected_locations_for_summary,
+            cases,
+            bool(files.mapping),
+        )
+        groups_by_dataset[dataset.name] = group_cases
+        group_options = list(group_cases)
+        group_key = f"download_groups::{dataset.name}"
+        stored_groups = st.session_state.get(group_key, group_options)
+        selected_groups_for_summary = [
+            group for group in stored_groups if group in group_options
+        ]
+        if (
+            group_options
+            and group_key in st.session_state
+            and selected_groups_for_summary != stored_groups
         ):
-            dataset_conditions = matched_conditions(dataset.name, conditions)
+            st.session_state[group_key] = selected_groups_for_summary
+
+        all_cases_key = f"download_all_cases::{dataset.name}"
+        all_cases_for_summary = st.session_state.get(all_cases_key, True)
+        case_codes_for_summary: set[str] = set()
+        for group in selected_groups_for_summary:
+            available_cases = group_cases[group]
+            if all_cases_for_summary:
+                case_codes_for_summary.update(available_cases)
+            else:
+                selection_key = f"download_case_selection::{dataset.name}::{group}"
+                saved_cases = st.session_state.get(selection_key, available_cases)
+                case_codes_for_summary.update(
+                    case for case in saved_cases if case in available_cases
+                )
+        case_count = len(case_codes_for_summary)
+
+        location_count = len(selected_locations_for_summary)
+        group_count = len(selected_groups_for_summary)
+        location_summary = (
+            f"{location_count} location"
+            if location_count == 1
+            else f"{location_count} locations"
+        )
+        group_summary = (
+            f"{group_count} group" if group_count == 1 else f"{group_count} groups"
+        )
+        if all_cases_for_summary and case_count:
+            case_summary = (
+                f"all {case_count} case"
+                if case_count == 1
+                else f"all {case_count} cases"
+            )
+        elif case_count:
+            case_summary = "1 selected case" if case_count == 1 else f"{case_count} selected cases"
+        else:
+            case_summary = "no cases"
+        dataset_summary = (
+            f"{result_dataset_labels[dataset.name]} | {location_summary} | "
+            f"{group_summary} | {case_summary}"
+        )
+
+        with st.expander(dataset_summary, expanded=(dataset == selected_dataset)):
             if dataset_conditions:
                 st.caption(
-                    " · ".join(
-                        f"{token}: {description}"
+                    " | ".join(
+                        f"{token} - {description}"
                         for token, description in dataset_conditions
                     )
                 )
-            try:
-                dataset_sheets = _load_cached(_cached_results, dataset)
-            except Exception as exc:
-                st.error(f"Could not read `{dataset.name}`: {exc}")
-                invalid_selected_locations.append(dataset.name)
-                continue
-            result_sheets_by_dataset[dataset.name] = dataset_sheets
-            if not dataset_sheets:
-                st.error(f"`{dataset.name}` contains no worksheets.")
-                invalid_selected_locations.append(dataset.name)
-                continue
-
-            location_options = list(dataset_sheets)
-            location_key = f"download_locations::{dataset.name}"
-            location_column, group_column = st.columns(2, gap="medium")
-            with location_column:
-                if location_key in st.session_state:
-                    stored_locations = st.session_state[location_key]
-                    valid_locations = [
-                        location for location in stored_locations if location in location_options
-                    ]
-                    if valid_locations != stored_locations:
-                        st.session_state[location_key] = valid_locations
-                    selected_locations = st.multiselect(
-                        "Locations",
-                        options=[SELECT_ALL_OPTION, CLEAR_ALL_OPTION, *location_options],
-                        format_func=_case_option_label,
-                        select_all=False,
-                        key=location_key,
-                        on_change=_handle_multiselect_dropdown_action,
-                        args=(location_key, location_options),
-                    )
-                else:
-                    selected_locations = st.multiselect(
-                        "Locations",
-                        options=[SELECT_ALL_OPTION, CLEAR_ALL_OPTION, *location_options],
-                        default=location_options,
-                        format_func=_case_option_label,
-                        select_all=False,
-                        key=location_key,
-                        on_change=_handle_multiselect_dropdown_action,
-                        args=(location_key, location_options),
-                    )
+            if location_key in st.session_state:
+                stored_locations = st.session_state[location_key]
+                selected_locations = st.multiselect(
+                    "Locations",
+                    options=[SELECT_ALL_OPTION, CLEAR_ALL_OPTION, *location_options],
+                    format_func=lambda value: _location_option_label(value, dataset_sheets),
+                    select_all=False,
+                    key=location_key,
+                    on_change=_handle_multiselect_dropdown_action,
+                    args=(location_key, location_options),
+                )
+            else:
+                selected_locations = st.multiselect(
+                    "Locations",
+                    options=[SELECT_ALL_OPTION, CLEAR_ALL_OPTION, *location_options],
+                    default=location_options,
+                    format_func=lambda value: _location_option_label(value, dataset_sheets),
+                    select_all=False,
+                    key=location_key,
+                    on_change=_handle_multiselect_dropdown_action,
+                    args=(location_key, location_options),
+                )
             locations_by_dataset[dataset.name] = selected_locations
 
             for location in selected_locations:
@@ -1124,50 +1435,44 @@ def render_chart_download_dialog() -> None:
                 )
                 if report.errors:
                     invalid_selected_locations.append(f"{dataset.name} / {location}")
+                    validation_messages.append(
+                        f"{dataset.name} / {location}: {' '.join(report.errors)}"
+                    )
                     st.error(
                         f"`{location}` cannot be exported until its result data are corrected: "
                         + " ".join(report.errors)
                     )
 
-            group_cases = _export_group_cases(
-                dataset_sheets,
-                selected_locations,
-                cases,
-                bool(files.mapping),
-            )
-            groups_by_dataset[dataset.name] = group_cases
-            group_options = list(group_cases)
-            with group_column:
-                if group_options:
-                    group_key = f"download_groups::{dataset.name}"
-                    if group_key in st.session_state:
-                        stored_groups = st.session_state[group_key]
-                        valid_groups = [group for group in stored_groups if group in group_options]
-                        if valid_groups != stored_groups:
-                            st.session_state[group_key] = valid_groups
-                        selected_groups = st.multiselect(
-                            "Case groups",
-                            options=[SELECT_ALL_OPTION, CLEAR_ALL_OPTION, *group_options],
-                            format_func=_case_option_label,
-                            select_all=False,
-                            key=group_key,
-                            on_change=_handle_multiselect_dropdown_action,
-                            args=(group_key, group_options),
-                        )
-                    else:
-                        selected_groups = st.multiselect(
-                            "Case groups",
-                            options=[SELECT_ALL_OPTION, CLEAR_ALL_OPTION, *group_options],
-                            default=group_options,
-                            format_func=_case_option_label,
-                            select_all=False,
-                            key=group_key,
-                            on_change=_handle_multiselect_dropdown_action,
-                            args=(group_key, group_options),
-                        )
+            if group_options:
+                group_key = f"download_groups::{dataset.name}"
+                if group_key in st.session_state:
+                    stored_groups = st.session_state[group_key]
+                    selected_groups = st.multiselect(
+                        "Case groups",
+                        options=[SELECT_ALL_OPTION, CLEAR_ALL_OPTION, *group_options],
+                        format_func=_case_option_label,
+                        select_all=False,
+                        key=group_key,
+                        on_change=_handle_multiselect_dropdown_action,
+                        args=(group_key, group_options),
+                    )
                 else:
-                    selected_groups = []
-                    st.info("No mapped cases are available at all selected locations.")
+                    selected_groups = st.multiselect(
+                        "Case groups",
+                        options=[SELECT_ALL_OPTION, CLEAR_ALL_OPTION, *group_options],
+                        default=group_options,
+                        format_func=_case_option_label,
+                        select_all=False,
+                        key=group_key,
+                        on_change=_handle_multiselect_dropdown_action,
+                        args=(group_key, group_options),
+                    )
+            else:
+                selected_groups = []
+                if selected_locations:
+                    st.info("No cases are available at the selected locations.")
+                else:
+                    st.info("Select at least one location to configure case groups.")
             selected_groups_by_dataset[dataset.name] = selected_groups
 
             selected_cases_for_groups: dict[str, list[str]] = {}
@@ -1179,40 +1484,84 @@ def render_chart_download_dialog() -> None:
                     key=all_cases_key,
                     help="Clear this to choose cases separately for each selected group.",
                 )
-                case_columns = st.columns(2, gap="medium")
-                for group_index, group in enumerate(selected_groups):
-                    available_cases = group_cases[group]
-                    if all_cases:
-                        selected_cases_for_groups[group] = available_cases.copy()
-                        continue
-
-                    selection_key = f"download_case_selection::{dataset.name}::{group}"
-                    widget_key = f"download_case_picker::{dataset.name}::{group}"
-                    saved_cases = st.session_state.get(selection_key, available_cases)
-                    saved_cases = [case for case in saved_cases if case in available_cases]
-                    st.session_state[selection_key] = saved_cases.copy()
-                    widget_cases = st.session_state.get(widget_key, saved_cases)
-                    st.session_state[widget_key] = [
-                        case
-                        for case in widget_cases
-                        if case in available_cases or case in {SELECT_ALL_OPTION, CLEAR_ALL_OPTION}
-                    ]
-                    with case_columns[group_index % 2]:
-                        st.multiselect(
-                            f"{group} cases",
-                            options=[SELECT_ALL_OPTION, CLEAR_ALL_OPTION, *available_cases],
-                            select_all=False,
-                            format_func=_case_option_label,
-                            key=widget_key,
-                            on_change=_handle_download_case_selection,
-                            args=(widget_key, selection_key, available_cases),
-                        )
-                    selected_cases_for_groups[group] = st.session_state[selection_key].copy()
+                if all_cases:
+                    selected_cases_for_groups = {
+                        group: group_cases[group].copy() for group in selected_groups
+                    }
+                else:
+                    max_columns = min(3, len(selected_groups))
+                    row_count = (len(selected_groups) + max_columns - 1) // max_columns
+                    groups_per_row, extra_groups = divmod(
+                        len(selected_groups), row_count
+                    )
+                    group_offset = 0
+                    for row_index in range(row_count):
+                        row_size = groups_per_row + (row_index < extra_groups)
+                        case_columns = st.columns(row_size, gap="small")
+                        row_groups = selected_groups[
+                            group_offset : group_offset + row_size
+                        ]
+                        for column, group in zip(case_columns, row_groups):
+                            available_cases = group_cases[group]
+                            selection_key = (
+                                f"download_case_selection::{dataset.name}::{group}"
+                            )
+                            widget_key = (
+                                f"download_case_picker::{dataset.name}::{group}"
+                            )
+                            saved_cases = st.session_state.get(
+                                selection_key, available_cases
+                            )
+                            saved_cases = [
+                                case for case in saved_cases if case in available_cases
+                            ]
+                            st.session_state[selection_key] = saved_cases.copy()
+                            widget_cases = st.session_state.get(widget_key, saved_cases)
+                            st.session_state[widget_key] = [
+                                case
+                                for case in widget_cases
+                                if case in available_cases
+                                or case in {SELECT_ALL_OPTION, CLEAR_ALL_OPTION}
+                            ]
+                            with column:
+                                st.multiselect(
+                                    f"{group} cases",
+                                    options=[
+                                        SELECT_ALL_OPTION,
+                                        CLEAR_ALL_OPTION,
+                                        *available_cases,
+                                    ],
+                                    select_all=False,
+                                    format_func=_case_option_label,
+                                    key=widget_key,
+                                    on_change=_handle_download_case_selection,
+                                    args=(widget_key, selection_key, available_cases),
+                                )
+                            selected_cases_for_groups[group] = st.session_state[
+                                selection_key
+                            ].copy()
             case_selections_by_dataset[dataset.name] = selected_cases_for_groups
-            if selected_locations:
-                st.caption("Case choices include codes present in every selected location.")
+            dataset_y_axis_slots[dataset.name] = st.empty()
 
-    st.subheader("Limits")
+    if any(len(locations) > 1 for locations in locations_by_dataset.values()):
+        st.caption("Only cases available at every selected location can be selected.")
+
+    st.divider()
+    export_plan: list[tuple[WorkbookSource, str, str, list[str]]] = []
+    for dataset in selected_datasets:
+        for location in locations_by_dataset.get(dataset.name, []):
+            for group in selected_groups_by_dataset.get(dataset.name, []):
+                selected_cases = case_selections_by_dataset.get(dataset.name, {}).get(group, [])
+                if selected_cases:
+                    export_plan.append((dataset, location, group, selected_cases))
+    export_plan_by_dataset: dict[str, list[tuple[WorkbookSource, str, str, list[str]]]] = {
+        dataset.name: [] for dataset in selected_datasets
+    }
+    for export_item in export_plan:
+        export_plan_by_dataset[export_item[0].name].append(export_item)
+
+    st.subheader("Chart settings")
+    st.markdown("**Limits by location**")
     export_limit_source: WorkbookSource | None = None
     export_limits: pd.DataFrame | None = None
     export_limit_series_by_location: dict[str, str] = {}
@@ -1256,33 +1605,54 @@ def render_chart_download_dialog() -> None:
 
         if len(limit_series_options) > 1 and export_locations:
             st.caption(
-                "Choose a series for each location. A location’s choice applies to every selected dataset containing it."
+                "Choose one series per location. It applies to every selected dataset containing that location."
             )
-            limit_columns = st.columns(2, gap="medium")
-            for location_index, location in enumerate(export_locations):
-                limit_series_key = (
-                    f"download_limit_series::{export_limit_source.name}::{location}"
+            if export_locations:
+                max_columns = min(3, len(export_locations))
+                row_count = (len(export_locations) + max_columns - 1) // max_columns
+                locations_per_row, extra_locations = divmod(
+                    len(export_locations), row_count
                 )
-                main_limit_key = (
-                    f"limit_series_selection::{export_limit_source.name}::{location}"
-                )
-                preferred_series = st.session_state.get(main_limit_key, "No limit")
-                if (
-                    location == selected_location
-                    and export_limit_source == selected_limit_file
-                ):
-                    preferred_series = selected_limit
-                if preferred_series not in limit_series_options:
-                    preferred_series = "No limit"
-                if st.session_state.get(limit_series_key) not in limit_series_options:
-                    st.session_state[limit_series_key] = preferred_series
-                with limit_columns[location_index % 2]:
-                    export_limit_series_by_location[location] = st.selectbox(
-                        location,
-                        options=limit_series_options,
-                        key=limit_series_key,
-                        help=f"Limit curve applied to {location} in every selected dataset.",
-                    )
+                location_offset = 0
+                for row_index in range(row_count):
+                    row_size = locations_per_row + (row_index < extra_locations)
+                    limit_columns = st.columns(row_size, gap="small")
+                    row_locations = export_locations[
+                        location_offset : location_offset + row_size
+                    ]
+                    for column, location in zip(limit_columns, row_locations):
+                        limit_series_key = (
+                            f"download_limit_series::{export_limit_source.name}::{location}"
+                        )
+                        main_limit_key = (
+                            f"limit_series_selection::{export_limit_source.name}::{location}"
+                        )
+                        preferred_series = st.session_state.get(
+                            main_limit_key, "No limit"
+                        )
+                        if (
+                            location == selected_location
+                            and export_limit_source == selected_limit_file
+                        ):
+                            preferred_series = selected_limit
+                        if preferred_series not in limit_series_options:
+                            preferred_series = "No limit"
+                        if (
+                            st.session_state.get(limit_series_key)
+                            not in limit_series_options
+                        ):
+                            st.session_state[limit_series_key] = preferred_series
+                        with column:
+                            export_limit_series_by_location[location] = st.radio(
+                                location,
+                                options=limit_series_options,
+                                key=limit_series_key,
+                                help=(
+                                    f"Limit curve applied to {location} in every "
+                                    "selected dataset."
+                                ),
+                            )
+                    location_offset += row_size
         elif export_locations:
             st.caption("No valid limit series are available. These charts will use No limit.")
         else:
@@ -1300,129 +1670,204 @@ def render_chart_download_dialog() -> None:
     else:
         st.caption("No limit workbook loaded. Chart sets will be exported without limits.")
 
-    st.subheader("Y-axis scale")
-    st.caption("Starts with the live-chart settings. Changes here affect this ZIP only.")
-    download_auto_y_limits = st.checkbox(
-        "Auto y-axis limits",
-        key=DOWNLOAD_AUTO_Y_LIMITS_KEY,
-        help="Use automatic ranges or fixed maxima shared across all exported charts of each type.",
+    st.divider()
+    st.markdown("**Chart options**")
+    include_thd = st.checkbox(
+        "Include THD plots",
+        value=True,
+        key="download_include_thd",
+        help="Add a separate vertical THD chart for each selected group when its data are complete.",
     )
-    if not download_auto_y_limits:
-        st.caption("Values above a fixed maximum are clipped. Spectrum and THD use separate maxima.")
-        export_scale_left, export_scale_right = st.columns(2, gap="medium")
-        with export_scale_left:
-            st.session_state.setdefault(
-                DOWNLOAD_SPECTRUM_Y_INPUT_KEY,
-                st.session_state[DOWNLOAD_SPECTRUM_Y_CAP_KEY],
-            )
-            st.number_input(
-                "Spectrum maximum (%)",
-                min_value=0.000001,
-                step=_y_axis_input_step(
-                    st.session_state[DOWNLOAD_SPECTRUM_Y_CAP_KEY]
-                ),
-                format="%.6g",
-                key=DOWNLOAD_SPECTRUM_Y_INPUT_KEY,
-            )
-            st.session_state[DOWNLOAD_SPECTRUM_Y_CAP_KEY] = st.session_state[
-                DOWNLOAD_SPECTRUM_Y_INPUT_KEY
-            ]
-        with export_scale_right:
-            st.session_state.setdefault(
-                DOWNLOAD_THD_Y_INPUT_KEY,
-                st.session_state[DOWNLOAD_THD_Y_CAP_KEY],
-            )
-            st.number_input(
-                "THD maximum (%)",
-                min_value=0.000001,
-                step=_y_axis_input_step(st.session_state[DOWNLOAD_THD_Y_CAP_KEY]),
-                format="%.6g",
-                key=DOWNLOAD_THD_Y_INPUT_KEY,
-            )
-            st.session_state[DOWNLOAD_THD_Y_CAP_KEY] = st.session_state[
-                DOWNLOAD_THD_Y_INPUT_KEY
-            ]
+    download_show_all_harmonic_numbers = st.checkbox(
+        "Show all harmonic numbers",
+        value=True,
+        key="download_show_all_harmonic_numbers",
+        help="Label every harmonic order present in the selected results.",
+    )
 
-    st.subheader("Output")
-    output_left, output_right = st.columns(2, gap="medium")
-    with output_left:
-        include_thd = st.checkbox(
-            "Include THD",
-            value=True,
-            key="download_include_thd",
-            help="Add a separate vertical THD chart for each selected group when its data are complete.",
-        )
-        include_case_descriptions = st.checkbox(
-            "Add CSV case descriptions",
-            value=True,
-            key="download_include_case_descriptions",
-            help="Include a case_descriptions.csv with Case and Description columns for each chart group.",
-        )
-    with output_right:
-        split_by_folders = st.checkbox(
-            "Split files into folders",
-            value=True,
-            key="download_split_by_folders",
-            help="Organize files by dataset, location, and case group inside the ZIP.",
-        )
-
-    export_plan: list[tuple[WorkbookSource, str, str, list[str]]] = []
+    export_scale_values_by_dataset: dict[str, dict[str, list[float]]] = {}
     for dataset in selected_datasets:
-        for location in locations_by_dataset.get(dataset.name, []):
-            for group in selected_groups_by_dataset.get(dataset.name, []):
-                selected_cases = case_selections_by_dataset.get(dataset.name, {}).get(group, [])
-                if selected_cases:
-                    export_plan.append((dataset, location, group, selected_cases))
-
-    if export_plan and not download_auto_y_limits and not invalid_selected_locations:
-        spectrum_clipped = 0
-        thd_clipped = 0
-        max_spectrum_value = 0.0
-        max_thd_value = 0.0
-        for dataset, location, _group, selected_cases in export_plan:
-            selected_limit_for_export = export_limit_series_by_location.get(
-                location, "No limit"
-            )
-            export_data = build_group_data(
-                result_sheets_by_dataset[dataset.name][location],
-                selected_cases,
-                limits=export_limits if selected_limit_for_export != "No limit" else None,
-                limit_series=selected_limit_for_export,
-            )
-            spectrum_max = _max_numeric_value(export_data)
-            max_spectrum_value = max(max_spectrum_value, spectrum_max)
-            if spectrum_max > st.session_state[DOWNLOAD_SPECTRUM_Y_CAP_KEY]:
-                spectrum_clipped += 1
-            if include_thd:
-                export_thd_data, _ = build_thd_data(export_data, description_by_case)
-                thd_max = _max_numeric_value(export_thd_data["THD (%)"])
-                max_thd_value = max(max_thd_value, thd_max)
-                if thd_max > st.session_state[DOWNLOAD_THD_Y_CAP_KEY]:
-                    thd_clipped += 1
-        if spectrum_clipped or thd_clipped:
-            clipped_messages = []
-            if spectrum_clipped:
-                clipped_messages.append(
-                    f"{spectrum_clipped} spectrum chart(s), up to {max_spectrum_value:.5g}%"
+        spectrum_values: list[float] = []
+        thd_values: list[float] = []
+        if not invalid_selected_locations:
+            for _, location, _group, selected_cases in export_plan_by_dataset[dataset.name]:
+                selected_limit_for_export = export_limit_series_by_location.get(
+                    location, "No limit"
                 )
-            if thd_clipped:
-                clipped_messages.append(
-                    f"{thd_clipped} THD chart(s), up to {max_thd_value:.5g}%"
+                export_data = build_group_data(
+                    result_sheets_by_dataset[dataset.name][location],
+                    selected_cases,
+                    limits=(
+                        export_limits
+                        if selected_limit_for_export != "No limit"
+                        else None
+                    ),
+                    limit_series=selected_limit_for_export,
                 )
-            st.warning(
-                "The selected maxima crop data in "
-                + " and ".join(clipped_messages)
-                + ". Increase the maxima or continue knowing those PNG values will be clipped."
-            )
+                spectrum_values.append(_max_numeric_value(export_data))
+                if include_thd:
+                    export_thd_data, _ = build_thd_data(
+                        export_data, description_by_case
+                    )
+                    thd_maximum = _max_numeric_value(export_thd_data["THD (%)"])
+                    if thd_maximum > 0:
+                        thd_values.append(thd_maximum)
+        export_scale_values_by_dataset[dataset.name] = {
+            "spectrum": spectrum_values,
+            "thd": thd_values,
+        }
 
+    download_auto_y_max_by_dataset: dict[str, dict[str, float]] = {}
+    download_spectrum_y_max_by_dataset: dict[str, float] = {}
+    download_thd_y_max_by_dataset: dict[str, float] = {}
+    for dataset in selected_datasets:
+        selected_values = export_scale_values_by_dataset[dataset.name]
+        if selected_values["spectrum"]:
+            suggested_spectrum = _suggested_y_axis_max(
+                max(selected_values["spectrum"])
+            )
+            suggested_thd = _suggested_y_axis_max(
+                max(selected_values["thd"], default=0.0)
+            )
+        else:
+            suggested_spectrum, suggested_thd = _suggested_dataset_y_axis_maxima(
+                result_sheets_by_dataset.get(dataset.name, {}),
+                locations_by_dataset.get(dataset.name, []),
+                mapped_case_codes if files.mapping else None,
+                export_limits,
+                export_limit_series_by_location,
+            )
+        download_auto_y_max_by_dataset[dataset.name] = {
+            "spectrum": suggested_spectrum,
+            "thd": suggested_thd,
+        }
+        spectrum_cap_key = _dataset_y_axis_key(
+            DOWNLOAD_SPECTRUM_Y_CAP_KEY, dataset.name
+        )
+        thd_cap_key = _dataset_y_axis_key(DOWNLOAD_THD_Y_CAP_KEY, dataset.name)
+        _ensure_positive_number_state(spectrum_cap_key, None, suggested_spectrum)
+        if include_thd:
+            _ensure_positive_number_state(thd_cap_key, None, suggested_thd)
+        download_spectrum_y_max_by_dataset[dataset.name] = float(
+            st.session_state[spectrum_cap_key]
+        )
+        download_thd_y_max_by_dataset[dataset.name] = float(
+            st.session_state.get(thd_cap_key, suggested_thd)
+        )
+        if not download_auto_y_limits:
+            with dataset_y_axis_slots[dataset.name].container():
+                st.divider()
+                st.markdown("**Y-axis limits**")
+                spectrum_input_key = _dataset_y_axis_key(
+                    DOWNLOAD_SPECTRUM_Y_INPUT_KEY, dataset.name
+                )
+                thd_input_key = _dataset_y_axis_key(
+                    DOWNLOAD_THD_Y_INPUT_KEY, dataset.name
+                )
+                st.session_state.setdefault(
+                    spectrum_input_key, st.session_state[spectrum_cap_key]
+                )
+                st.session_state.setdefault(thd_input_key, st.session_state[thd_cap_key])
+                scale_columns = st.columns(2 if include_thd else 1, gap="medium")
+                with scale_columns[0]:
+                    st.number_input(
+                        "Spectrum maximum (%)",
+                        min_value=0.000001,
+                        step=_y_axis_input_step(st.session_state[spectrum_cap_key]),
+                        format="%.6g",
+                        key=spectrum_input_key,
+                    )
+                    st.session_state[spectrum_cap_key] = st.session_state[
+                        spectrum_input_key
+                    ]
+                    download_spectrum_y_max_by_dataset[dataset.name] = float(
+                        st.session_state[spectrum_cap_key]
+                    )
+                    clipped_spectra = [
+                        value
+                        for value in export_scale_values_by_dataset[dataset.name][
+                            "spectrum"
+                        ]
+                        if value > download_spectrum_y_max_by_dataset[dataset.name]
+                    ]
+                    if clipped_spectra:
+                        st.caption(
+                            f"Clips {len(clipped_spectra)} chart(s); values reach "
+                            f"{max(clipped_spectra):.5g}%."
+                        )
+                if include_thd:
+                    with scale_columns[1]:
+                        st.number_input(
+                            "THD maximum (%)",
+                            min_value=0.000001,
+                            step=_y_axis_input_step(st.session_state[thd_cap_key]),
+                            format="%.6g",
+                            key=thd_input_key,
+                        )
+                        st.session_state[thd_cap_key] = st.session_state[thd_input_key]
+                        download_thd_y_max_by_dataset[dataset.name] = float(
+                            st.session_state[thd_cap_key]
+                        )
+                        clipped_thd = [
+                            value
+                            for value in export_scale_values_by_dataset[dataset.name][
+                                "thd"
+                            ]
+                            if value > download_thd_y_max_by_dataset[dataset.name]
+                        ]
+                        if clipped_thd:
+                            st.caption(
+                                f"Clips {len(clipped_thd)} THD chart(s); values reach "
+                                f"{max(clipped_thd):.5g}%."
+                            )
+    st.divider()
+    st.subheader("ZIP layout")
+    include_case_descriptions = st.checkbox(
+        "Add CSV case descriptions" if files.mapping else "Add CSV case list",
+        value=True,
+        key="download_include_case_descriptions",
+        help=(
+            "Add one case_descriptions.csv with Case and Description columns per chart group."
+            if files.mapping
+            else "Add one case_descriptions.csv per chart group. The Description column will be blank because no mapping workbook is loaded."
+        ),
+    )
+    split_by_folders = st.checkbox(
+        "Organize files into folders",
+        value=True,
+        key="download_split_by_folders",
+        help="Create dataset / location / group folders inside the ZIP.",
+    )
+    st.divider()
+    st.subheader("Review and download")
+    if validation_messages:
+        st.error(
+            "ZIP preparation is disabled until these result workbook issues are corrected. "
+            "Open the affected dataset sections above for details.\n\n"
+            + "\n".join(f"- {message}" for message in validation_messages)
+        )
     if export_plan:
         expected_thd_count = len(export_plan) if include_thd else 0
-        st.info(
-            f"{len(export_plan)} dataset/location/group combinations · "
-            f"{len(export_plan)} harmonic charts · up to {expected_thd_count} THD charts."
-        )
+        case_csv_count = len(export_plan) if include_case_descriptions else 0
+        case_csv_label = "case-description CSVs" if files.mapping else "case-list CSVs"
+        with st.container():
+            st.markdown(f"**{len(export_plan)} chart sets**")
+            output_counts = [f"{len(export_plan)} harmonic spectra"]
+            if include_thd:
+                output_counts.append(f"up to {expected_thd_count} THD charts")
+            if include_case_descriptions:
+                output_counts.append(f"{case_csv_count} {case_csv_label}")
+            st.caption(" · ".join(output_counts))
+            review_details = [
+                "Folders: dataset / location / group"
+                if split_by_folders
+                else "Filenames identify the dataset, location, group, and chart type"
+            ]
+            if include_thd:
+                review_details.append("THD is omitted when group data are incomplete")
+            st.caption(" · ".join(review_details))
     else:
-        st.warning("Select at least one location, group, and case to prepare a chart set.")
+        st.warning("Select at least one location, case group, and case to prepare a chart set.")
 
     signature_data = {
         "datasets": [
@@ -1442,10 +1887,25 @@ def render_chart_download_dialog() -> None:
         "include_thd": include_thd,
         "include_case_descriptions": include_case_descriptions,
         "split_by_folders": split_by_folders,
-        "show_all_harmonic_numbers": show_all_harmonic_numbers,
+        "show_all_harmonic_numbers": download_show_all_harmonic_numbers,
         "auto_y_limits": download_auto_y_limits,
-        "spectrum_y_max": st.session_state[DOWNLOAD_SPECTRUM_Y_CAP_KEY],
-        "thd_y_max": st.session_state[DOWNLOAD_THD_Y_CAP_KEY],
+        "y_max_by_dataset": {
+            dataset.name: {
+                "spectrum": (
+                    download_auto_y_max_by_dataset[dataset.name]["spectrum"]
+                    if download_auto_y_limits
+                    else download_spectrum_y_max_by_dataset[dataset.name]
+                ),
+                "thd": (
+                    download_auto_y_max_by_dataset[dataset.name]["thd"]
+                    if download_auto_y_limits
+                    else download_thd_y_max_by_dataset[dataset.name]
+                )
+                if include_thd
+                else None,
+            }
+            for dataset in selected_datasets
+        },
     }
     signature = json.dumps(signature_data, sort_keys=True)
     if st.session_state.get("download_archive_signature") != signature:
@@ -1462,11 +1922,11 @@ def render_chart_download_dialog() -> None:
         disabled=not can_prepare,
     )
     if prepare_clicked:
-        progress_bar = st.progress(0.0, text="Preparing selected charts…")
-        status_container = st.status("Preparing chart set", expanded=True)
+        status_container = st.status("Preparing ZIP", expanded=True)
         thd_omissions: list[str] = []
         try:
             with status_container:
+                progress_bar = st.progress(0.0, text="Preparing selected charts…")
                 total_groups = len(export_plan)
                 def export_items():
                     loaded_dataset: WorkbookSource | None = None
@@ -1496,12 +1956,13 @@ def render_chart_download_dialog() -> None:
                             description_by_case,
                             f"{group} · {location}",
                             limit_display=export_limit_display,
-                            show_all_harmonic_numbers=show_all_harmonic_numbers,
+                            show_all_harmonic_numbers=download_show_all_harmonic_numbers,
                             y_axis_max=(
-                                None
+                                download_auto_y_max_by_dataset[dataset.name]["spectrum"]
                                 if download_auto_y_limits
-                                else st.session_state[DOWNLOAD_SPECTRUM_Y_CAP_KEY]
+                                else download_spectrum_y_max_by_dataset[dataset.name]
                             ),
+                            case_color_order=groups_by_dataset[dataset.name][group],
                         )
                         thd_figure = None
                         thd_order_range = None
@@ -1517,10 +1978,11 @@ def render_chart_download_dialog() -> None:
                                     selected_cases,
                                     f"Voltage THD · orders {lower_order}–{upper_order}",
                                     y_axis_max=(
-                                        None
+                                        download_auto_y_max_by_dataset[dataset.name]["thd"]
                                         if download_auto_y_limits
-                                        else st.session_state[DOWNLOAD_THD_Y_CAP_KEY]
+                                        else download_thd_y_max_by_dataset[dataset.name]
                                     ),
+                                    case_color_order=groups_by_dataset[dataset.name][group],
                                 )
                             else:
                                 thd_omissions.append(
@@ -1680,7 +2142,9 @@ for (group, group_rows, group_case_codes), group_container in zip(
                     )
                 ),
             )
-            chip_styles = _case_chip_styles(case_control_key, selected_cases)
+            chip_styles = _case_chip_styles(
+                case_control_key, selected_cases, group_case_codes
+            )
             if chip_styles:
                 st.html(chip_styles)
 
@@ -1696,10 +2160,10 @@ for (group, group_rows, group_case_codes), group_container in zip(
         )
         if not auto_y_limits:
             spectrum_data_max = _max_numeric_value(group_data)
-            if spectrum_data_max > st.session_state[SPECTRUM_Y_CAP_KEY]:
+            if spectrum_data_max > st.session_state[live_spectrum_y_cap_key]:
                 st.warning(
                     f"Spectrum values reach {spectrum_data_max:.5g}%, above the fixed "
-                    f"maximum of {st.session_state[SPECTRUM_Y_CAP_KEY]:.5g}%. Higher values are clipped."
+                    f"maximum of {st.session_state[live_spectrum_y_cap_key]:.5g}%. Higher values are clipped."
                 )
         figure = build_harmonic_figure(
             group_data,
@@ -1707,12 +2171,28 @@ for (group, group_rows, group_case_codes), group_container in zip(
             f"{group} · {selected_location}",
             limit_display=limit_display,
             show_all_harmonic_numbers=show_all_harmonic_numbers,
-            y_axis_max=None if auto_y_limits else st.session_state[SPECTRUM_Y_CAP_KEY],
+            y_axis_max=None if auto_y_limits else st.session_state[live_spectrum_y_cap_key],
+            case_color_order=group_case_codes,
         )
+        chart_key = f"plot::{selected_dataset.name}::{selected_location}::{group}"
+        trace_case_codes = {
+            curve_number: str(trace.legendgroup)
+            for curve_number, trace in enumerate(figure.data)
+            if trace.legendgroup in group_case_codes
+        }
         st.plotly_chart(
             figure,
             width="stretch",
             theme=None,
+            on_select=partial(
+                _handle_spectrum_point_selection,
+                chart_key=chart_key,
+                case_key=case_key,
+                selection_key=selection_key,
+                available_cases=group_case_codes,
+                trace_case_codes=trace_case_codes,
+            ),
+            selection_mode="points",
             config={
                 "displaylogo": False,
                 "displayModeBar": True,
@@ -1725,7 +2205,7 @@ for (group, group_rows, group_case_codes), group_container in zip(
                     "scale": 2,
                 },
             },
-            key=f"plot::{selected_dataset.name}::{selected_location}::{group}",
+            key=chart_key,
         )
 
         thd_data, thd_order_range = build_thd_data(group_data, description_by_case)
@@ -1742,17 +2222,18 @@ for (group, group_rows, group_case_codes), group_container in zip(
                 thd_data_max = _max_numeric_value(thd_data["THD (%)"])
                 if (
                     not auto_y_limits
-                    and thd_data_max > st.session_state[THD_Y_CAP_KEY]
+                    and thd_data_max > st.session_state[live_thd_y_cap_key]
                 ):
                     st.warning(
                         f"THD values reach {thd_data_max:.5g}%, above the fixed "
-                        f"maximum of {st.session_state[THD_Y_CAP_KEY]:.5g}%. Higher values are clipped."
+                        f"maximum of {st.session_state[live_thd_y_cap_key]:.5g}%. Higher values are clipped."
                     )
                 thd_figure = build_thd_figure(
                     thd_data,
                     selected_cases,
                     f"Voltage THD · orders {lower_order}–{upper_order}",
-                    y_axis_max=None if auto_y_limits else st.session_state[THD_Y_CAP_KEY],
+                    y_axis_max=None if auto_y_limits else st.session_state[live_thd_y_cap_key],
+                    case_color_order=group_case_codes,
                 )
                 st.plotly_chart(
                     thd_figure,

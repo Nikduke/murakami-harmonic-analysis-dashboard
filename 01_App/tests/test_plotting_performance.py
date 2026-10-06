@@ -6,7 +6,7 @@ import pandas as pd
 from plotting import build_group_data, build_harmonic_figure
 
 
-def test_large_spectrum_avoids_fragmentation_and_repeated_hover_payload():
+def test_large_spectrum_compacts_hover_context_without_fragmentation():
     case_count = 125
     order_count = 1000
     orders = np.arange(2, order_count + 2)
@@ -36,13 +36,14 @@ def test_large_spectrum_avoids_fragmentation_and_repeated_hover_payload():
     assert case_traces[0].hoverlabel.font.color == "#20283C"
     assert sum(len(item.x) for item in case_traces) == order_count
     assert len(case_traces[0].customdata) == order_count
-    assert set(case_traces[0].customdata) == {"#20283C", "#C00000"}
+    assert {point[0] for point in case_traces[0].customdata} == {"#20283C", "#C00000"}
+    assert isinstance(case_traces[0].customdata[0][1], int)
     assert all(item.meta == descriptions[case_codes[0]] for item in case_traces)
     assert "%{meta}" in case_traces[0].hovertemplate
-    assert "<span style='color:%{customdata}'" in case_traces[0].hovertemplate
+    assert "<span style='color:%{customdata[0]}'" in case_traces[0].hovertemplate
     assert sum(
         item.showlegend is not False
         for item in figure.data
         if item.name in case_codes
     ) == case_count
-    assert len(figure.to_json().encode("utf-8")) < 5 * 1024 * 1024
+    assert len(figure.to_json().encode("utf-8")) < 6 * 1024 * 1024
