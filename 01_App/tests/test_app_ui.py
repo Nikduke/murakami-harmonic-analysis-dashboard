@@ -126,11 +126,7 @@ def test_live_y_axis_maxima_are_remembered_per_dataset(monkeypatch):
     )
     datasets = list(app.radio(key="result_dataset").options)
     assert len(datasets) >= 2
-    first_dataset_note = next(
-        element.value
-        for element in app.caption
-        if element.value.startswith("Manual maxima saved for")
-    )
+    first_dataset_name = app.session_state["result_dataset"].name
 
     app.checkbox(key="auto_y_limits_v4").uncheck().run()
     first_spectrum_input = _dataset_axis_key(app, "spectrum_y_max_input")
@@ -143,12 +139,8 @@ def test_live_y_axis_maxima_are_remembered_per_dataset(monkeypatch):
     assert thd_ranges[-1] == 2.0
 
     app.radio(key="result_dataset").set_value(datasets[1]).run()
-    second_dataset_note = next(
-        element.value
-        for element in app.caption
-        if element.value.startswith("Manual maxima saved for")
-    )
-    assert second_dataset_note != first_dataset_note
+    second_dataset_name = app.session_state["result_dataset"].name
+    assert second_dataset_name != first_dataset_name
     second_spectrum_input = _dataset_axis_key(app, "spectrum_y_max_input")
     second_thd_input = _dataset_axis_key(app, "thd_y_max_input")
     app.number_input(key=second_spectrum_input).set_value(8.0).run()

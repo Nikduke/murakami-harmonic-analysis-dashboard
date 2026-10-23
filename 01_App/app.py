@@ -14,6 +14,16 @@ import streamlit as st
 
 from chart_selection import cases_from_plot_state
 from chart_export import ChartExportItem, build_chart_archive, slug_name
+from custom_selection_ui import (
+    CASE_CONTEXT_KEY,
+    LIBRARY_KEY,
+    abandon_custom_selection_editor,
+    custom_case_selection_key,
+    custom_case_widget_key,
+    initialize_custom_selection_state,
+    render_custom_selection_manager,
+)
+from custom_selections import matching_case_codes, serialise_library, validate_library
 from data_loader import (
     UploadExpansion,
     UploadedWorkbook,
@@ -138,8 +148,10 @@ def _reset_analysis_selections() -> None:
                 "limit_series_active::",
                 "limit_series_explicit::",
                 "download_",
+                "custom-cases::",
+                "custom-case-selection::",
             )
-        ):
+        ) or key == CASE_CONTEXT_KEY:
             del st.session_state[key]
     st.session_state["show_chart_download_dialog"] = False
 
@@ -495,6 +507,7 @@ st.session_state.setdefault("uploaded_workbooks", [])
 st.session_state.setdefault("uploaded_duplicate_names", [])
 st.session_state.setdefault("upload_widget_version", 0)
 st.session_state.setdefault("show_chart_download_dialog", False)
+initialize_custom_selection_state()
 local_files = discover_input_files(INPUT_DIR)
 
 st.header(APP_NAME)
@@ -1031,15 +1044,11 @@ with st.sidebar:
         key=SHOW_ALL_HARMONIC_NUMBERS_KEY,
         help="Label each harmonic order present in the selected result data.",
     )
-    show_group_tabs = (
-        st.checkbox(
-            "Show groups as tabs",
-            value=True,
-            key="show_group_tabs",
-            help="Turn this off to show each case group one below another.",
-        )
-        if files.mapping
-        else False
+    show_group_tabs = st.checkbox(
+        "Show groups as tabs",
+        value=True,
+        key="show_group_tabs",
+        help="Turn this off to show each case group one below another.",
     )
     open_chart_download = st.button(
         "Download charts",
@@ -1222,6 +1231,9 @@ else:
     case_groups = [
         ("All", cases, all_case_codes)
     ]
+    all_group_rows = cases
+
+case_groups.append(("Custom selections", all_group_rows, all_case_codes))
 
 
 @st.dialog(
@@ -1262,6 +1274,12 @@ def render_chart_download_dialog() -> None:
     if not selected_datasets:
         st.info("Select at least one result dataset to prepare a chart set.")
         return
+    try:
+        saved_custom_rules = validate_library(st.session_state.get(LIBRARY_KEY, []))
+    except ValueError as exc:
+        saved_custom_rules = []
+        st.error(f"Saved custom selections cannot be exported: {exc}")
+    saved_custom_rules_by_id = {rule["id"]: rule for rule in saved_custom_rules}
     st.markdown("**Y-axis limits**")
     st.caption(
         "Auto applies to the whole ZIP. Turn it off to set maxima inside each dataset section."
@@ -1281,6 +1299,9 @@ def render_chart_download_dialog() -> None:
     groups_by_dataset: dict[str, dict[str, list[str]]] = {}
     selected_groups_by_dataset: dict[str, list[str]] = {}
     case_selections_by_dataset: dict[str, dict[str, list[str]]] = {}
+    common_cases_by_dataset: dict[str, list[str]] = {}
+    custom_matches_by_dataset: dict[str, dict[str, list[str]]] = {}
+    selected_custom_rule_ids_by_dataset: dict[str, list[str]] = {}
     dataset_y_axis_slots: dict[str, object] = {}
     invalid_selected_locations: list[str] = []
     validation_messages: list[str] = []
@@ -1341,6 +1362,34 @@ def render_chart_download_dialog() -> None:
             cases,
             bool(files.mapping),
         )
+        if selected_locations_for_summary:
+            first_location_cases = [
+                str(column)
+                for column in dataset_sheets[selected_locations_for_summary[0]].columns[1:]
+            ]
+            common_case_set = set.intersection(
+                *[
+                    {
+                        str(column)
+                        for column in dataset_sheets[location].columns[1:]
+                    }
+                    for location in selected_locations_for_summary
+                ]
+            )
+            common_case_codes = [
+                code for code in first_location_cases if code in common_case_set
+            ]
+        else:
+            common_case_codes = []
+        common_cases_by_dataset[dataset.name] = common_case_codes
+        custom_matches_by_dataset[dataset.name] = {
+            rule["id"]: (
+                matching_case_codes(common_case_codes, description_by_case, rule)[0]
+                if files.mapping
+                else []
+            )
+            for rule in saved_custom_rules
+        }
         groups_by_dataset[dataset.name] = group_cases
         group_options = list(group_cases)
         group_key = f"download_groups::{dataset.name}"
@@ -1368,6 +1417,23 @@ def render_chart_download_dialog() -> None:
                 case_codes_for_summary.update(
                     case for case in saved_cases if case in available_cases
                 )
+        custom_selection_key = f"download_custom_selections::{dataset.name}"
+        if files.mapping and saved_custom_rules:
+            stored_custom_rule_ids = st.session_state.get(
+                custom_selection_key, list(saved_custom_rules_by_id)
+            )
+            selected_custom_rule_ids_for_summary = [
+                rule_id
+                for rule_id in stored_custom_rule_ids
+                if rule_id in saved_custom_rules_by_id
+                and custom_matches_by_dataset[dataset.name].get(rule_id)
+            ]
+        else:
+            selected_custom_rule_ids_for_summary = []
+        for rule_id in selected_custom_rule_ids_for_summary:
+            case_codes_for_summary.update(
+                custom_matches_by_dataset[dataset.name].get(rule_id, [])
+            )
         case_count = len(case_codes_for_summary)
 
         location_count = len(selected_locations_for_summary)
@@ -1394,6 +1460,14 @@ def render_chart_download_dialog() -> None:
             f"{result_dataset_labels[dataset.name]} | {location_summary} | "
             f"{group_summary} | {case_summary}"
         )
+        if selected_custom_rule_ids_for_summary:
+            selection_count = len(selected_custom_rule_ids_for_summary)
+            selection_label = (
+                "matching saved selection"
+                if selection_count == 1
+                else "matching saved selections"
+            )
+            dataset_summary += f" | {selection_count} {selection_label}"
 
         with st.expander(dataset_summary, expanded=(dataset == selected_dataset)):
             if dataset_conditions:
@@ -1516,13 +1590,8 @@ def render_chart_download_dialog() -> None:
                                 case for case in saved_cases if case in available_cases
                             ]
                             st.session_state[selection_key] = saved_cases.copy()
-                            widget_cases = st.session_state.get(widget_key, saved_cases)
-                            st.session_state[widget_key] = [
-                                case
-                                for case in widget_cases
-                                if case in available_cases
-                                or case in {SELECT_ALL_OPTION, CLEAR_ALL_OPTION}
-                            ]
+                            if widget_key not in st.session_state:
+                                st.session_state[widget_key] = saved_cases.copy()
                             with column:
                                 st.multiselect(
                                     f"{group} cases",
@@ -1540,6 +1609,73 @@ def render_chart_download_dialog() -> None:
                             selected_cases_for_groups[group] = st.session_state[
                                 selection_key
                             ].copy()
+                        group_offset += row_size
+            selected_custom_rule_ids: list[str] = []
+            if saved_custom_rules:
+                st.divider()
+                st.markdown("**Additional custom chart sets**")
+                if not files.mapping:
+                    st.caption(
+                        "Load a case-mapping workbook to match saved selections."
+                    )
+                else:
+                    st.caption(
+                        "Each selected rule adds one chart per location using cases that "
+                        "match in all selected locations. No-match rules are skipped; used "
+                        "rules go in the ZIP as `custom_selections.json`."
+                    )
+                    custom_rule_ids = list(saved_custom_rules_by_id)
+                    custom_selection_key = (
+                        f"download_custom_selections::{dataset.name}"
+                    )
+                    if custom_selection_key in st.session_state:
+                        stored_custom_rule_ids = st.session_state[
+                            custom_selection_key
+                        ]
+                        valid_custom_rule_ids = [
+                            rule_id
+                            for rule_id in stored_custom_rule_ids
+                            if rule_id in saved_custom_rules_by_id
+                        ]
+                        if valid_custom_rule_ids != stored_custom_rule_ids:
+                            st.session_state[custom_selection_key] = (
+                                valid_custom_rule_ids
+                            )
+
+                    def custom_rule_option_label(rule_id: str) -> str:
+                        if rule_id in {SELECT_ALL_OPTION, CLEAR_ALL_OPTION}:
+                            return _case_option_label(rule_id)
+                        rule = saved_custom_rules_by_id[rule_id]
+                        match_count = len(
+                            custom_matches_by_dataset[dataset.name].get(rule_id, [])
+                        )
+                        case_label = (
+                            "matching case" if match_count == 1 else "matching cases"
+                        )
+                        return f"{rule['name']} — {match_count} {case_label}"
+
+                    custom_selection_defaults = (
+                        {"default": custom_rule_ids}
+                        if custom_selection_key not in st.session_state
+                        else {}
+                    )
+                    selected_custom_rule_ids = st.multiselect(
+                        "Saved selections to include",
+                        options=[
+                            SELECT_ALL_OPTION,
+                            CLEAR_ALL_OPTION,
+                            *custom_rule_ids,
+                        ],
+                        format_func=custom_rule_option_label,
+                        select_all=False,
+                        key=custom_selection_key,
+                        on_change=_handle_multiselect_dropdown_action,
+                        args=(custom_selection_key, custom_rule_ids),
+                        **custom_selection_defaults,
+                    )
+            selected_custom_rule_ids_by_dataset[dataset.name] = (
+                selected_custom_rule_ids
+            )
             case_selections_by_dataset[dataset.name] = selected_cases_for_groups
             dataset_y_axis_slots[dataset.name] = st.empty()
 
@@ -1548,12 +1684,32 @@ def render_chart_download_dialog() -> None:
 
     st.divider()
     export_plan: list[tuple[WorkbookSource, str, str, list[str]]] = []
+    custom_rule_ids_in_export: set[str] = set()
+    custom_selection_chart_count = 0
     for dataset in selected_datasets:
         for location in locations_by_dataset.get(dataset.name, []):
             for group in selected_groups_by_dataset.get(dataset.name, []):
                 selected_cases = case_selections_by_dataset.get(dataset.name, {}).get(group, [])
                 if selected_cases:
                     export_plan.append((dataset, location, group, selected_cases))
+            for rule_id in selected_custom_rule_ids_by_dataset.get(dataset.name, []):
+                selected_cases = custom_matches_by_dataset.get(dataset.name, {}).get(
+                    rule_id, []
+                )
+                if not selected_cases:
+                    continue
+                custom_group = (
+                    f"Custom selection — {saved_custom_rules_by_id[rule_id]['name']}"
+                )
+                groups_by_dataset[dataset.name][custom_group] = (
+                    common_cases_by_dataset[dataset.name].copy()
+                )
+                case_selections_by_dataset[dataset.name][custom_group] = (
+                    selected_cases.copy()
+                )
+                export_plan.append((dataset, location, custom_group, selected_cases))
+                custom_rule_ids_in_export.add(rule_id)
+                custom_selection_chart_count += 1
     export_plan_by_dataset: dict[str, list[tuple[WorkbookSource, str, str, list[str]]]] = {
         dataset.name: [] for dataset in selected_datasets
     }
@@ -1857,6 +2013,17 @@ def render_chart_download_dialog() -> None:
                 output_counts.append(f"up to {expected_thd_count} THD charts")
             if include_case_descriptions:
                 output_counts.append(f"{case_csv_count} {case_csv_label}")
+            if custom_selection_chart_count:
+                custom_set_label = (
+                    "chart set"
+                    if custom_selection_chart_count == 1
+                    else "chart sets"
+                )
+                output_counts.append(
+                    f"{custom_selection_chart_count} {custom_set_label} "
+                    "from saved selections"
+                )
+                output_counts.append("saved rules: custom_selections.json")
             st.caption(" · ".join(output_counts))
             review_details = [
                 "Folders: dataset / location / group"
@@ -1867,7 +2034,9 @@ def render_chart_download_dialog() -> None:
                 review_details.append("THD is omitted when group data are incomplete")
             st.caption(" · ".join(review_details))
     else:
-        st.warning("Select at least one location, case group, and case to prepare a chart set.")
+        st.warning(
+            "Select a location and at least one case group or matching saved selection."
+        )
 
     signature_data = {
         "datasets": [
@@ -1878,6 +2047,17 @@ def render_chart_download_dialog() -> None:
                     group: case_selections_by_dataset.get(dataset.name, {}).get(group, [])
                     for group in selected_groups_by_dataset.get(dataset.name, [])
                 },
+                "saved_selections": [
+                    {
+                        "rule": saved_custom_rules_by_id[rule_id],
+                        "cases": custom_matches_by_dataset.get(dataset.name, {}).get(
+                            rule_id, []
+                        ),
+                    }
+                    for rule_id in selected_custom_rule_ids_by_dataset.get(
+                        dataset.name, []
+                    )
+                ],
             }
             for dataset in selected_datasets
         ],
@@ -2023,12 +2203,27 @@ def render_chart_download_dialog() -> None:
                 def update_archive_progress(fraction: float, message: str) -> None:
                     progress_bar.progress(0.35 + 0.65 * fraction, text=message)
 
+                exported_custom_rules = [
+                    rule
+                    for rule in saved_custom_rules
+                    if rule["id"] in custom_rule_ids_in_export
+                ]
+                additional_files = (
+                    {
+                        "custom_selections.json": serialise_library(
+                            exported_custom_rules
+                        ).encode("utf-8")
+                    }
+                    if exported_custom_rules
+                    else None
+                )
                 archive_bytes, file_count = build_chart_archive(
                     export_items(),
                     split_by_folders=split_by_folders,
                     include_case_descriptions=include_case_descriptions,
                     on_progress=update_archive_progress,
                     total_items=total_groups,
+                    additional_files=additional_files,
                 )
                 archive_name = (
                     f"murakami_chart_set_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
@@ -2096,10 +2291,20 @@ if show_group_tabs:
         key="group_tabs",
         on_change="rerun",
     )
+    if (
+        st.session_state.get("group_tabs") != "Custom selections"
+        and st.session_state.get("custom_selections::editor_open")
+    ):
+        abandon_custom_selection_editor()
 else:
     st.markdown("#### Groups:")
     group_containers = [
-        st.expander(group, expanded=(group == "Intact" or not files.mapping))
+        st.expander(
+            group,
+            expanded=(
+                group in {"Intact", "Custom selections"} or not files.mapping
+            ),
+        )
         for group, _, _ in case_groups
     ]
 
@@ -2109,12 +2314,36 @@ for (group, group_rows, group_case_codes), group_container in zip(
     if show_group_tabs and not group_container.open:
         continue
     with group_container:
+        is_custom_selection = group == "Custom selections"
+        active_custom_rule = None
+        if is_custom_selection:
+            custom_view = render_custom_selection_manager(
+                all_case_codes,
+                description_by_case,
+                dataset_name=selected_dataset.name,
+                location=selected_location,
+            )
+            group_case_codes = custom_view.case_codes
+            active_custom_rule = custom_view.active_rule
+
         if not group_case_codes:
-            st.info("No cases from this group are present in the selected location.")
+            if is_custom_selection and active_custom_rule is not None:
+                st.info(
+                    f"No cases match **{active_custom_rule['name']}** in the selected "
+                    "dataset and location."
+                )
+            else:
+                st.info("No cases from this group are present in the selected location.")
             continue
 
-        case_key = f"cases::{selected_dataset.name}::{selected_location}::{group}"
-        selection_key = f"case-selection::{selected_dataset.name}::{selected_location}::{group}"
+        if is_custom_selection:
+            case_key = custom_case_widget_key(selected_dataset.name, selected_location)
+            selection_key = custom_case_selection_key(
+                selected_dataset.name, selected_location
+            )
+        else:
+            case_key = f"cases::{selected_dataset.name}::{selected_location}::{group}"
+            selection_key = f"case-selection::{selected_dataset.name}::{selected_location}::{group}"
         if selection_key not in st.session_state:
             st.session_state[selection_key] = group_case_codes.copy()
         saved_cases = st.session_state[selection_key]
@@ -2124,6 +2353,12 @@ for (group, group_rows, group_case_codes), group_container in zip(
         if case_key not in st.session_state:
             st.session_state[case_key] = valid_saved_cases.copy()
         case_control_key = f"case-selector-{slug_name(group)}"
+        chart_context_label = (
+            f"Custom selection — {active_custom_rule['name']}"
+            if is_custom_selection and active_custom_rule is not None
+            else group
+        )
+        case_color_order = all_case_codes if is_custom_selection else group_case_codes
         with st.container(key=case_control_key):
             selected_cases = st.multiselect(
                 "Cases to compare",
@@ -2136,7 +2371,10 @@ for (group, group_rows, group_case_codes), group_container in zip(
                 help=(
                     "Select one or more cases. Use Select all or Clear all in the dropdown. "
                     + (
+                        "The active custom rule limits the available cases. "
                         "Hover over a point for its full description."
+                        if is_custom_selection and active_custom_rule is not None
+                        else "Hover over a point for its full description."
                         if files.mapping
                         else "Cases are identified by their result column names."
                     )
@@ -2168,11 +2406,11 @@ for (group, group_rows, group_case_codes), group_container in zip(
         figure = build_harmonic_figure(
             group_data,
             description_by_case,
-            f"{group} · {selected_location}",
+            f"{chart_context_label} · {selected_location}",
             limit_display=limit_display,
             show_all_harmonic_numbers=show_all_harmonic_numbers,
             y_axis_max=None if auto_y_limits else st.session_state[live_spectrum_y_cap_key],
-            case_color_order=group_case_codes,
+            case_color_order=case_color_order,
         )
         chart_key = f"plot::{selected_dataset.name}::{selected_location}::{group}"
         trace_case_codes = {
@@ -2200,7 +2438,7 @@ for (group, group_rows, group_case_codes), group_container in zip(
                 "toImageButtonOptions": {
                     "format": "png",
                     "filename": slug_name(
-                        f"{selected_dataset_label}_{selected_location}_{group}"
+                        f"{selected_dataset_label}_{selected_location}_{chart_context_label}"
                     ),
                     "scale": 2,
                 },
@@ -2231,9 +2469,14 @@ for (group, group_rows, group_case_codes), group_container in zip(
                 thd_figure = build_thd_figure(
                     thd_data,
                     selected_cases,
-                    f"Voltage THD · orders {lower_order}–{upper_order}",
+                    (
+                        f"Voltage THD · {active_custom_rule['name']} · orders "
+                        f"{lower_order}–{upper_order}"
+                        if is_custom_selection and active_custom_rule is not None
+                        else f"Voltage THD · orders {lower_order}–{upper_order}"
+                    ),
                     y_axis_max=None if auto_y_limits else st.session_state[live_thd_y_cap_key],
-                    case_color_order=group_case_codes,
+                    case_color_order=case_color_order,
                 )
                 st.plotly_chart(
                     thd_figure,
@@ -2245,7 +2488,7 @@ for (group, group_rows, group_case_codes), group_container in zip(
                         "toImageButtonOptions": {
                             "format": "png",
                             "filename": slug_name(
-                                f"thd_{selected_dataset_label}_{selected_location}_{group}"
+                                f"thd_{selected_dataset_label}_{selected_location}_{chart_context_label}"
                             ),
                             "scale": 2,
                         },
@@ -2277,7 +2520,10 @@ for (group, group_rows, group_case_codes), group_container in zip(
                 )
 
         csv_name = (
-            slug_name(f"{selected_dataset_label}_{selected_location}_{group}") + ".csv"
+            slug_name(
+                f"{selected_dataset_label}_{selected_location}_{chart_context_label}"
+            )
+            + ".csv"
         )
         st.download_button(
             "Download plotted data (CSV)",

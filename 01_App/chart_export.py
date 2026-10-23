@@ -90,8 +90,9 @@ def build_chart_archive(
     on_progress: Callable[[float, str], None] | None = None,
     total_items: int | None = None,
     include_case_descriptions: bool = True,
+    additional_files: dict[str, bytes] | None = None,
 ) -> tuple[bytes, int]:
-    """Render the selected figures and return ZIP bytes and member count."""
+    """Render selected figures and supporting files into a ZIP archive."""
     if total_items is None and isinstance(items, Sequence):
         total_items = len(items)
     if total_items == 0 or (isinstance(items, Sequence) and not items):
@@ -181,6 +182,9 @@ def build_chart_archive(
             flush_batch()
             if not processed_items:
                 raise ValueError("Select at least one dataset, location, and group.")
+            for path, contents in (additional_files or {}).items():
+                archive.writestr(_reserve_path(path, used_paths), contents)
+                file_count += 1
 
         archive_bytes = archive_buffer.getvalue()
 
