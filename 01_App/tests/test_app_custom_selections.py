@@ -3,8 +3,8 @@ from custom_selection_ui import (
     CASE_CONTEXT_KEY,
     IMPORT_STATUS_KEY,
     LIBRARY_KEY,
-    SAVED_TABLE_GENERATION_KEY,
-    SAVED_TABLE_KEY_PREFIX,
+    SAVED_SELECTION_RADIO_GENERATION_KEY,
+    SAVED_SELECTION_RADIO_KEY_PREFIX,
     custom_case_selection_key,
     custom_case_widget_key,
     render_custom_selection_manager,
@@ -118,19 +118,32 @@ def test_custom_filter_updates_existing_chips_charts_and_context_selection():
     assert not app.exception
 
 
-def test_saved_table_row_activates_rule_and_blank_name_uses_rule_conditions():
+def test_saved_selection_radio_activates_one_rule_and_blank_name_uses_conditions():
     app = _custom_dashboard()
     first_rule = _create_filter(app, name="No filters", phrase="no 154 kV Filters")
     second_rule = _create_filter(app, name="No WTGs", phrase="no WTGs")
 
-    table_key = (
-        f"{SAVED_TABLE_KEY_PREFIX}::"
-        f"{app.session_state[SAVED_TABLE_GENERATION_KEY]}"
+    radio_key = (
+        f"{SAVED_SELECTION_RADIO_KEY_PREFIX}::"
+        f"{app.session_state[SAVED_SELECTION_RADIO_GENERATION_KEY]}"
     )
-    app.session_state[table_key] = {"selection": {"rows": [0]}}
-    app.run()
+    assert app.session_state[SAVED_SELECTION_RADIO_GENERATION_KEY] > 0
+    app.radio(key=radio_key).set_value(first_rule["id"]).run()
     assert app.session_state[ACTIVE_RULE_KEY] == first_rule["id"]
-    assert app.dataframe(key=table_key) is not None
+    assert app.radio(key=radio_key).value == first_rule["id"]
+
+    # A radio choice cannot be toggled off by clicking the active option again.
+    dataset = app.session_state["result_dataset"].name
+    location = app.session_state["result_location"]
+    case_key = custom_case_widget_key(dataset, location)
+    current_cases = app.multiselect(key=case_key).value
+    narrowed_cases = current_cases[:-1]
+    app.multiselect(key=case_key).set_value(narrowed_cases).run()
+    app.radio(key=radio_key).set_value(first_rule["id"]).run()
+    assert app.session_state[ACTIVE_RULE_KEY] == first_rule["id"]
+    assert app.multiselect(key=case_key).value == narrowed_cases
+    app.button(key="custom_restore_matches").click().run()
+
     dataset = app.session_state["result_dataset"].name
     location = app.session_state["result_location"]
     case_key = custom_case_widget_key(dataset, location)

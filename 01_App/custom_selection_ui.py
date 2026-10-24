@@ -6,7 +6,6 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-import pandas as pd
 import streamlit as st
 
 from custom_selections import (
@@ -28,8 +27,8 @@ EDITOR_MODE_KEY = "custom_selections::editor_mode"
 EDITOR_RULE_ID_KEY = "custom_selections::editor_rule_id"
 DELETE_RULE_ID_KEY = "custom_selections::delete_rule_id"
 CASE_CONTEXT_KEY = "custom_selections::case_context"
-SAVED_TABLE_GENERATION_KEY = "custom_selections::saved_table_generation"
-SAVED_TABLE_KEY_PREFIX = "custom_selections::saved_table"
+SAVED_SELECTION_RADIO_GENERATION_KEY = "custom_selections::saved_radio_generation"
+SAVED_SELECTION_RADIO_KEY_PREFIX = "custom_selections::saved_radio"
 IMPORT_GENERATION_KEY = "custom_selections::import_generation"
 IMPORT_STATUS_KEY = "custom_selections::import_status"
 
@@ -57,7 +56,7 @@ def initialize_custom_selection_state() -> None:
     st.session_state.setdefault(EDITOR_RULE_ID_KEY, None)
     st.session_state.setdefault(DELETE_RULE_ID_KEY, None)
     st.session_state.setdefault(CASE_CONTEXT_KEY, None)
-    st.session_state.setdefault(SAVED_TABLE_GENERATION_KEY, 0)
+    st.session_state.setdefault(SAVED_SELECTION_RADIO_GENERATION_KEY, 0)
     st.session_state.setdefault(IMPORT_GENERATION_KEY, 0)
     st.session_state.setdefault(IMPORT_STATUS_KEY, None)
 
@@ -66,28 +65,20 @@ def _clear_import_status() -> None:
     st.session_state[IMPORT_STATUS_KEY] = None
 
 
-def saved_table_widget_key() -> str:
+def saved_selection_radio_key() -> str:
     return (
-        f"{SAVED_TABLE_KEY_PREFIX}::"
-        f"{st.session_state[SAVED_TABLE_GENERATION_KEY]}"
+        f"{SAVED_SELECTION_RADIO_KEY_PREFIX}::"
+        f"{st.session_state[SAVED_SELECTION_RADIO_GENERATION_KEY]}"
     )
 
 
-def advance_saved_table_generation() -> None:
-    """Give a changed library a fresh table widget state key."""
-    st.session_state[SAVED_TABLE_GENERATION_KEY] += 1
+def advance_saved_selection_radio_generation() -> None:
+    """Give a changed library a fresh saved-rule radio state key."""
+    st.session_state[SAVED_SELECTION_RADIO_GENERATION_KEY] += 1
 
 
-def _set_saved_table_selection(
-    rules: list[dict[str, Any]], active_rule_id: str | None
-) -> None:
-    selected_index = next(
-        (index for index, rule in enumerate(rules) if rule["id"] == active_rule_id),
-        None,
-    )
-    st.session_state[saved_table_widget_key()] = {
-        "selection": {"rows": [] if selected_index is None else [selected_index]}
-    }
+def _set_saved_selection_radio(active_rule_id: str | None) -> None:
+    st.session_state[saved_selection_radio_key()] = active_rule_id
 
 
 def abandon_custom_selection_editor() -> None:
@@ -236,8 +227,8 @@ def _render_rule_editor(
         updated_rules.append(saved_rule)
     st.session_state[LIBRARY_KEY] = updated_rules
     st.session_state[ACTIVE_RULE_KEY] = saved_rule["id"]
-    advance_saved_table_generation()
-    _set_saved_table_selection(updated_rules, saved_rule["id"])
+    advance_saved_selection_radio_generation()
+    _set_saved_selection_radio(saved_rule["id"])
     matches, _ = matching_case_codes(
         eligible_case_codes, description_by_case, saved_rule
     )
@@ -288,27 +279,23 @@ def render_custom_selection_manager(
         rule_matches[rule["id"]] = matches
         missing_description_count = max(missing_description_count, missing_count)
 
-    table_key = saved_table_widget_key()
-    if table_key not in st.session_state:
-        _set_saved_table_selection(rules, active_rule_id)
-    else:
-        table_state = st.session_state.get(table_key, {})
-        selected_rows = table_state.get("selection", {}).get("rows", [])
-        if selected_rows:
-            selected_index = selected_rows[0]
-            if 0 <= selected_index < len(rules):
-                selected_rule_id = rules[selected_index]["id"]
-                if selected_rule_id != active_rule_id:
-                    st.session_state[ACTIVE_RULE_KEY] = selected_rule_id
-                    st.session_state[DELETE_RULE_ID_KEY] = None
-                    abandon_custom_selection_editor()
-                    active_rule_id = selected_rule_id
-                    active_rule = rules[selected_index]
-        elif active_rule is not None:
-            # Re-clicking the active row may clear Streamlit's row selection.
-            # Treat that as a request to restore every match and keep the row active.
-            _set_case_state(case_key, selection_key, rule_matches[active_rule_id])
-            _set_saved_table_selection(rules, active_rule_id)
+    radio_key = saved_selection_radio_key()
+    valid_rule_ids = {rule["id"] for rule in rules}
+    if radio_key not in st.session_state:
+        st.session_state[radio_key] = active_rule_id
+    selected_rule_id = st.session_state[radio_key]
+    if selected_rule_id not in valid_rule_ids:
+        selected_rule_id = None
+        st.session_state[radio_key] = None
+    if selected_rule_id != active_rule_id:
+        st.session_state[ACTIVE_RULE_KEY] = selected_rule_id
+        st.session_state[DELETE_RULE_ID_KEY] = None
+        if selected_rule_id is not None:
+            abandon_custom_selection_editor()
+        active_rule_id = selected_rule_id
+        active_rule = next(
+            (rule for rule in rules if rule["id"] == active_rule_id), None
+        )
 
     allowed_case_codes = (
         rule_matches.get(active_rule_id, [])
@@ -357,8 +344,7 @@ def render_custom_selection_manager(
     st.divider()
     st.subheader("Saved selections")
     st.caption(
-        "Saved for this session. Select a row to activate it; matches use "
-        f"the current dataset and {location}."
+        f"Choose one rule. Matches use the current dataset and {location}."
     )
 
     active_rule = next(
@@ -367,46 +353,31 @@ def render_custom_selection_manager(
     )
     active_rule_id = active_rule["id"] if active_rule else None
     if rules:
-        table_data = pd.DataFrame(
-            [
-                {
-                    "Name": rule["name"],
-                    "Rule summary": rule_summary(rule),
-                    "Matches": (
-                        f"{len(rule_matches.get(rule['id'], []))} / "
-                        f"{len(eligible_case_codes)}"
-                    ),
-                }
-                for rule in rules
-            ],
-            columns=["Name", "Rule summary", "Matches"],
+        rule_by_id = {rule["id"]: rule for rule in rules}
+        rule_ids = [rule["id"] for rule in rules]
+        st.markdown(
+            "<style>"
+            ".st-key-custom-saved-selection-list "
+            "[data-testid='stRadioGroup'][aria-label='Active rule'] > div, "
+            ".st-key-custom-saved-selection-list "
+            "label[data-testid='stRadioOption'] { width: 100%; }"
+            "</style>",
+            unsafe_allow_html=True,
         )
-        selection_event = st.dataframe(
-            table_data,
-            key=table_key,
-            on_select="rerun",
-            selection_mode="single-row",
-            hide_index=True,
-            width="stretch",
-            height="auto",
-            column_config={
-                "Name": st.column_config.TextColumn("Name", width="medium"),
-                "Rule summary": st.column_config.TextColumn(
-                    "Rule summary", width="large"
+        with st.container(key="custom-saved-selection-list"):
+            st.radio(
+                "Active rule",
+                options=rule_ids,
+                index=None,
+                format_func=lambda rule_id: (
+                    f"**{rule_by_id[rule_id]['name']}** | "
+                    f"{rule_summary(rule_by_id[rule_id])} | "
+                    f"Matches: {len(rule_matches.get(rule_id, []))} / "
+                    f"{len(eligible_case_codes)} cases"
                 ),
-                "Matches": st.column_config.TextColumn("Matches", width="small"),
-            },
-        )
-        selected_rows = selection_event.selection.rows
-        if selected_rows:
-            selected_index = selected_rows[0]
-            if 0 <= selected_index < len(rules):
-                selected_rule_id = rules[selected_index]["id"]
-                if selected_rule_id != st.session_state.get(ACTIVE_RULE_KEY):
-                    st.session_state[ACTIVE_RULE_KEY] = selected_rule_id
-                    st.session_state[DELETE_RULE_ID_KEY] = None
-                    abandon_custom_selection_editor()
-                    st.rerun()
+                key=radio_key,
+                width="stretch",
+            )
     else:
         st.caption("No saved selections yet. Create one above.")
 
@@ -503,7 +474,7 @@ def render_custom_selection_manager(
             tuple(eligible_case_codes),
             tuple(eligible_case_codes),
         )
-        advance_saved_table_generation()
+        advance_saved_selection_radio_generation()
         st.rerun()
 
     if import_clicked and uploaded_library is not None:
@@ -528,7 +499,7 @@ def render_custom_selection_manager(
                 f"Imported {len(imported_rules)} saved selection(s).",
             )
             st.session_state[IMPORT_GENERATION_KEY] += 1
-            advance_saved_table_generation()
+            advance_saved_selection_radio_generation()
             st.rerun()
 
     pending_delete_id = st.session_state.get(DELETE_RULE_ID_KEY)
@@ -563,7 +534,7 @@ def render_custom_selection_manager(
                     tuple(eligible_case_codes),
                 )
             st.session_state[DELETE_RULE_ID_KEY] = None
-            advance_saved_table_generation()
+            advance_saved_selection_radio_generation()
             st.rerun()
 
     import_status = st.session_state.get(IMPORT_STATUS_KEY)
