@@ -1,5 +1,7 @@
 # Codex Development Prompt — Murakami Harmonic Analysis Streamlit App (V1)
 
+> **Historical document:** This prompt records the initial V1 requirements and design rationale. The application has since gained functionality and changed in some areas. For current implemented behaviour, use [APP_REFERENCE.md](APP_REFERENCE.md). Do not treat an old requirement in this prompt as implemented unless the current reference and code confirm it.
+
 ## Role
 
 Develop the first working version of a **local Streamlit harmonic-analysis dashboard** for the **Murakami** project.

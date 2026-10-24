@@ -327,13 +327,25 @@ def render_custom_selection_manager(
                 _set_case_state(case_key, selection_key, valid)
     st.session_state[CASE_CONTEXT_KEY] = context_signature
 
-    st.subheader("Create or edit selection")
-    if not st.session_state[EDITOR_OPEN_KEY]:
-        if st.button(
+    with st.container(
+        horizontal=True,
+        gap="small",
+        vertical_alignment="center",
+        key="custom-saved-selection-heading",
+    ):
+        st.markdown(
+            "<style>.st-key-custom-saved-selection-heading "
+            "[data-testid='stMarkdownContainer'] { margin: 0 !important; }</style>"
+            "<div style='font-size:1.1rem;font-weight:650;line-height:1.25;'>"
+            "Saved selections</div>",
+            unsafe_allow_html=True,
+        )
+        if not st.session_state[EDITOR_OPEN_KEY] and st.button(
             "New selection",
             key="custom_new_selection",
             icon=":material/add:",
             type="secondary",
+            width="content",
         ):
             _set_editor_draft(None, "new")
     if st.session_state[EDITOR_OPEN_KEY]:
@@ -344,12 +356,6 @@ def render_custom_selection_manager(
             dataset_name=dataset_name,
             location=location,
         )
-
-    st.divider()
-    st.subheader("Saved selections")
-    st.caption(
-        f"Choose one rule. Matches use the current dataset and {location}."
-    )
 
     active_rule = next(
         (rule for rule in rules if rule["id"] == st.session_state.get(ACTIVE_RULE_KEY)),
@@ -366,9 +372,31 @@ def render_custom_selection_manager(
             st.session_state[radio_key] = None
         st.markdown(
             "<style>"
+            ".st-key-custom-saved-selection-list {"
+            "border: 1px solid #d9dee7; border-radius: 6px; overflow: hidden;"
+            "}"
+            ".st-key-custom-saved-selection-list, "
+            ".st-key-custom-saved-selection-list [data-testid='stVerticalBlock'] {"
+            "gap: 0 !important;"
+            "}"
+            ".st-key-custom-saved-selection-list "
+            "[data-testid='stElementContainer'] { margin: 0 !important; padding: 0 !important; }"
+            ".st-key-custom-saved-selection-list "
+            ".st-key-custom-saved-selection-header {"
+            "padding: 0.15rem 0.5rem; background: #f4f6f8; color: #182943; "
+            "border-bottom: 1px solid #d9dee7;"
+            "}"
+            ".st-key-custom-saved-selection-list [data-testid='stColumn'] {"
+            "border-right: 1px solid #d9dee7; box-sizing: border-box;"
+            "padding-left: 0.5rem; padding-right: 0.5rem; color: #182943;"
+            "}"
+            ".st-key-custom-saved-selection-list [data-testid='stColumn']:last-child {"
+            "border-right: 0;"
+            "}"
             ".st-key-custom-saved-selection-list "
             "[class*='st-key-custom-saved-selection-row-'] {"
-            "position: relative; padding: 0.35rem 0.4rem; "
+            "position: relative; min-height: 2rem; padding: 0.1rem 0; "
+            "background: #ffffff; color: #182943;"
             "border-bottom: 1px solid #e5e7eb; cursor: pointer;"
             "}"
             ".st-key-custom-saved-selection-list "
@@ -376,8 +404,12 @@ def render_custom_selection_manager(
             "border-bottom: 0;"
             "}"
             ".st-key-custom-saved-selection-list "
-            "[class*='st-key-custom-saved-selection-row-'] [data-testid='stElementContainer'] {"
-            "margin-bottom: 0;"
+            "[class*='st-key-custom-saved-selection-row-'] "
+            "[data-testid='stMarkdownContainer'] { margin: 0 !important; }"
+            ".st-key-custom-saved-selection-list "
+            "[class*='st-key-custom-saved-selection-row-'] "
+            "[data-testid='stMarkdownContainer'] p {"
+            "margin: 0 !important; padding: 0; line-height: 1.35;"
             "}"
             ".st-key-custom-saved-selection-list "
             "[class*='st-key-custom-saved-selection-row-']:hover {"
@@ -398,25 +430,26 @@ def render_custom_selection_manager(
             "[class*='st-key-custom-saved-selection-row-'] "
             "[data-testid='stColumn']:not(:first-child) { pointer-events: none; }"
             ".st-key-custom-saved-selection-list "
-            "[class*='st-key-custom-saved-selection-row-']:hover "
-            "[data-testid='stRadioOption'] { cursor: pointer; }"
-            ".st-key-custom-saved-selection-list "
             "[class*='st-key-custom-saved-selection-row-'] [data-testid='stRadioOption'] "
             "[data-testid='stMarkdownContainer'] {"
             "position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; "
             "overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;"
             "}"
             ".st-key-custom-saved-selection-list "
-            ".st-key-custom-saved-selection-row-selected { background: #eef3fb; }"
+            ".st-key-custom-saved-selection-row-selected { background: #eef3fb; color: #182943; }"
             "</style>",
             unsafe_allow_html=True,
         )
         with st.container(key="custom-saved-selection-list"):
-            header = st.columns([0.05, 0.24, 0.53, 0.18], gap="small")
-            header[1].markdown("**Name**")
-            header[2].markdown("**Rule summary**")
-            header[3].markdown("**Matches**")
-            st.divider()
+            with st.container(key="custom-saved-selection-header"):
+                header = st.columns(
+                    [0.05, 0.29, 0.44, 0.22],
+                    gap=None,
+                    vertical_alignment="center",
+                )
+                header[1].markdown("**Name**")
+                header[2].markdown("**Rule summary**")
+                header[3].markdown("**Matches**")
 
             for index, rule_id in enumerate(rule_ids):
                 rule = rule_by_id[rule_id]
@@ -431,8 +464,8 @@ def render_custom_selection_manager(
                 )
                 with st.container(key=row_class):
                     radio_col, name_col, summary_col, matches_col = st.columns(
-                        [0.05, 0.24, 0.53, 0.18],
-                        gap="small",
+                        [0.05, 0.29, 0.44, 0.22],
+                        gap=None,
                         vertical_alignment="center",
                     )
                     with radio_col:

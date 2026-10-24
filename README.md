@@ -2,6 +2,14 @@
 
 The dashboard reviews harmonic-voltage distortion spectra from Excel workbooks, organized by result worksheet names and optionally by a case mapping workbook. It can overlay a limit series selected by the user and shows a separate vertical per-case voltage THD bar chart for harmonic orders 2–50 under each group spectrum, at the same plot height. It does not assign engineering pass/fail conclusions.
 
+## Documentation
+
+- [Current application reference](01_App/Docs/APP_REFERENCE.md) — implemented functionality, workbook rules, calculations, session behaviour, and exports.
+- [Documentation index](01_App/Docs/DOCUMENTATION_INDEX.md) — purpose and authority of each project document.
+- [User guide](01_App/Docs/User_Guide/Harmonic_Analysis_Dashboard_User_Guide.pdf) — operating steps with screenshots.
+- [Original V1 prompt](01_App/Docs/codex_prompt_murakami_harmonics_streamlit_v1_2026-10-02.md) — historical initial requirements and rationale.
+- [Application audit backlog](APPLICATION_AUDIT_BACKLOG.md) — previous audit evidence and pending ideas; proposals do not describe current behaviour.
+
 The project defaults to the light Streamlit theme. Plotly charts keep a white canvas and explicit dark titles, axis labels, ticks, legends, and THD values so their text remains readable if the surrounding page uses a different theme. Hover a harmonic point to see that case first, other cases above the selected limit beneath it, and the selected limit last with a red dash in the symbol column. The hovered case code is bold; other violating case codes use regular weight. When no limit is defined at that order, the hover says `No value at this order`. Very large hover payloads show the number of other violations to keep the chart responsive. Click a point to focus the case; Shift-click the selected point to restore all cases in the group. Case colors stay tied to the full group order when you narrow the selection, including in the spectrum, THD chart, and case chips. The case selector remains available for adding or removing comparison cases.
 
 When a case mapping workbook is loaded, the four mapped case groups appear alongside **All**, optional **Unmapped**, and **Custom selections**. Without a mapping workbook, **All** and **Custom selections** remain available. **Show groups as tabs** is available in either state; turn it off to stack the sections vertically. Custom rules need mapping descriptions to match cases.
@@ -10,7 +18,9 @@ The **Custom selections** tab (or section in stacked mode) lets you save filters
 
 Choose the active result dataset, busbar/location, and limit series in the **Analysis setup** sidebar. Up to five choices appear as visible single-choice lists; larger lists use searchable selectors. Locations update with the selected dataset, and limit series update with the selected limit workbook and location. A newly selected location starts with the current limit series; each location then remembers its own choice.
 
-The detailed V1 requirements are in [`01_App/Docs/codex_prompt_murakami_harmonics_streamlit_v1_2026-10-02.md`](01_App/Docs/codex_prompt_murakami_harmonics_streamlit_v1_2026-10-02.md).
+For operating instructions with screenshots, see the [User Guide (PDF)](01_App/Docs/User_Guide/Harmonic_Analysis_Dashboard_User_Guide.pdf) or the [editable Word guide](01_App/Docs/User_Guide/Harmonic_Analysis_Dashboard_User_Guide.docx).
+
+The original V1 prompt is retained for historical context. Use the [current application reference](01_App/Docs/APP_REFERENCE.md) for implemented behaviour.
 
 ## Project files
 
@@ -65,7 +75,7 @@ Open **Add Excel workbooks** in the sidebar to upload individual `.xlsx` workboo
 
 Use **Download charts** in the left **Analysis setup** controls to prepare a ZIP of selected harmonic spectra, optional THD charts, and optional case-description CSVs (included by default). Plotted data remains available from each chart's **Download plotted data (CSV)** button and is not added to the ZIP. Choose locations, groups, and cases separately for each result dataset; each location shows its workbook row count. Then choose a limit series for each selected location. The live view remembers a separate limit selection for each location, initializing a new location from the currently active series; the export uses one choice per location across selected datasets. PNG export uses Kaleido 1.4 and requires Chrome or Chromium on the machine running the app. The repository-root `packages.txt` installs Chromium on Streamlit Community Cloud; the local Windows setup uses installed Google Chrome.
 
-Within each dataset section, select saved rules under **Additional custom chart sets** to add charts alongside the standard group charts. A rule matches mapped case descriptions among cases available at all selected locations and adds one chart per selected location; rules with no matches are skipped. The ZIP includes the rules that produced charts in `custom_selections.json`; import that file through **Upload selections** to reuse them. When case CSVs are enabled, each chart's CSV lists its exact cases.
+Within each dataset section, saved rules start selected under **Additional custom chart sets**; clear any rules you do not want. A selected rule adds charts alongside the standard group charts. It matches mapped case descriptions among cases available at all selected locations and adds one chart per selected location; rules with no matches are skipped. The ZIP includes only rules that produced charts in `custom_selections.json`; import that file through **Upload selections** to reuse them. When case CSVs are enabled, each chart's CSV lists its exact cases.
 
 Once result data is loaded, **Auto y-axis limits** and **Show all harmonic numbers** are checked by default. In the sidebar, Auto y-axis limits appears below the limit controls and divider. Turn it off to set separate **Spectrum maximum (%)** and **THD maximum (%)** values for the active dataset. Live manual maxima are remembered separately for each result dataset and shared across its locations and groups. When a dataset has no saved maxima, the app finds the highest result value across its valid locations, includes each location's selected limit for Spectrum, then rounds the maxima up to whole percentage points. THD is calculated from result data. Each axis starts at zero, and the app warns when a fixed maximum would clip selected values. Turn off Show all harmonic numbers to use sparse automatic x-axis ticks.
 
