@@ -86,7 +86,7 @@ Custom rules match complete ordered phrases in mapped case descriptions. Matchin
 - The three blocks are combined with AND. A rule must contain at least one phrase.
 - Leave the name blank to generate a readable name from the entered phrases. Duplicate generated names receive a numeric suffix.
 
-The preview and match count use result cases available at the current dataset and location. Choose one saved rule from the radio list to activate it. Each full-width row shows the rule name, summary and match count; clicking anywhere in the row selects it. Only one rule can be active. Selecting the active option again does not clear it. Removing case chips narrows the active view; **Restore matches** restores every match. Dataset or location changes recalculate the matches. **Clear active** returns to normal case selection but keeps the rule. Edit changes apply only after Save; Delete requires confirmation.
+The preview and match count use result cases available at the current dataset and location. The saved-selection table has one radio button per row and shows the rule name, summary and match count. Click anywhere in a row to activate that rule. Only one rule can be active. Clicking the active row again does not clear it. Removing case chips narrows the active view; **Restore matches** restores every match. Dataset or location changes recalculate the matches. **Clear active** returns to normal case selection but keeps the rule. Edit changes apply only after Save; Delete requires confirmation.
 
 The saved rule library belongs to the current session. Users can download a versioned JSON backup or upload a validated JSON file to replace the session library. Invalid JSON leaves the existing library unchanged. There is no server-side or cross-session library storage.
 
@@ -148,7 +148,7 @@ The **Data validation and sources** expander lists workbook sources and validati
 | `01_App/validation.py` | Structural checks for mapping, result, and limit workbooks |
 | `01_App/plotting.py` | Harmonic-order alignment, THD calculation, and Plotly figures |
 | `01_App/custom_selections.py` | Rule matching, naming, validation, and JSON portability |
-| `01_App/custom_selection_ui.py` | Custom selection editor, saved-rule radio list, and session actions |
+| `01_App/custom_selection_ui.py` | Custom selection editor, saved-selection table with radio selection, and session actions |
 | `01_App/chart_export.py` | PNG rendering, safe filenames, optional case CSVs, and ZIP writing |
 | `01_App/tests/` | Loader, validation, plotting, state, custom-rule, and export regressions |
 

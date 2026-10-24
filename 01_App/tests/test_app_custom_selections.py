@@ -37,13 +37,20 @@ def _custom_chart_keys(app):
     }
 
 
+def _saved_selection_radio_key(app, rule_id):
+    return (
+        f"{SAVED_SELECTION_RADIO_KEY_PREFIX}::"
+        f"{app.session_state[SAVED_SELECTION_RADIO_GENERATION_KEY]}::{rule_id}"
+    )
+
+
 def _create_filter(app, name="No 154 kV filters", phrase="no 154 kV Filters"):
     app.button(key="custom_new_selection").click().run()
     app.text_input(key="custom_editor_name").set_value(name).run()
     app.multiselect(key="custom_editor_all").set_value([phrase]).run()
     app.button(key="custom_save_selection").click().run()
     assert not app.exception
-    return app.session_state[LIBRARY_KEY][0]
+    return app.session_state[LIBRARY_KEY][-1]
 
 
 def test_custom_filter_updates_existing_chips_charts_and_context_selection():
@@ -127,10 +134,14 @@ def test_saved_selection_radio_activates_one_rule_and_blank_name_uses_conditions
         f"{SAVED_SELECTION_RADIO_KEY_PREFIX}::"
         f"{app.session_state[SAVED_SELECTION_RADIO_GENERATION_KEY]}"
     )
+    first_radio_key = _saved_selection_radio_key(app, first_rule["id"])
+    second_radio_key = _saved_selection_radio_key(app, second_rule["id"])
     assert app.session_state[SAVED_SELECTION_RADIO_GENERATION_KEY] > 0
-    app.radio(key=radio_key).set_value(first_rule["id"]).run()
+    app.radio(key=first_radio_key).set_value(first_rule["id"]).run()
     assert app.session_state[ACTIVE_RULE_KEY] == first_rule["id"]
-    assert app.radio(key=radio_key).value == first_rule["id"]
+    assert app.session_state[radio_key] == first_rule["id"]
+    assert app.radio(key=first_radio_key).value == first_rule["id"]
+    assert app.radio(key=second_radio_key).value is None
 
     # A radio choice cannot be toggled off by clicking the active option again.
     dataset = app.session_state["result_dataset"].name
@@ -139,8 +150,9 @@ def test_saved_selection_radio_activates_one_rule_and_blank_name_uses_conditions
     current_cases = app.multiselect(key=case_key).value
     narrowed_cases = current_cases[:-1]
     app.multiselect(key=case_key).set_value(narrowed_cases).run()
-    app.radio(key=radio_key).set_value(first_rule["id"]).run()
+    app.radio(key=first_radio_key).set_value(first_rule["id"]).run()
     assert app.session_state[ACTIVE_RULE_KEY] == first_rule["id"]
+    assert app.session_state[radio_key] == first_rule["id"]
     assert app.multiselect(key=case_key).value == narrowed_cases
     app.button(key="custom_restore_matches").click().run()
 

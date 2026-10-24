@@ -81,6 +81,10 @@ def _set_saved_selection_radio(active_rule_id: str | None) -> None:
     st.session_state[saved_selection_radio_key()] = active_rule_id
 
 
+def _select_saved_selection_radio(radio_key: str, rule_id: str) -> None:
+    st.session_state[radio_key] = rule_id
+
+
 def abandon_custom_selection_editor() -> None:
     """Close an in-progress draft without changing saved or active rules."""
     st.session_state[EDITOR_OPEN_KEY] = False
@@ -355,29 +359,104 @@ def render_custom_selection_manager(
     if rules:
         rule_by_id = {rule["id"]: rule for rule in rules}
         rule_ids = [rule["id"] for rule in rules]
+        st.session_state.setdefault(radio_key, active_rule_id)
+        selected_rule_id = st.session_state[radio_key]
+        if selected_rule_id not in valid_rule_ids:
+            selected_rule_id = None
+            st.session_state[radio_key] = None
         st.markdown(
             "<style>"
             ".st-key-custom-saved-selection-list "
-            "[data-testid='stRadioGroup'][aria-label='Active rule'] > div, "
+            "[class*='st-key-custom-saved-selection-row-'] {"
+            "position: relative; padding: 0.35rem 0.4rem; "
+            "border-bottom: 1px solid #e5e7eb; cursor: pointer;"
+            "}"
             ".st-key-custom-saved-selection-list "
-            "label[data-testid='stRadioOption'] { width: 100%; }"
+            "[class*='st-key-custom-saved-selection-row-']:last-of-type {"
+            "border-bottom: 0;"
+            "}"
+            ".st-key-custom-saved-selection-list "
+            "[class*='st-key-custom-saved-selection-row-'] [data-testid='stElementContainer'] {"
+            "margin-bottom: 0;"
+            "}"
+            ".st-key-custom-saved-selection-list "
+            "[class*='st-key-custom-saved-selection-row-']:hover {"
+            "background: #f6f8fb;"
+            "}"
+            ".st-key-custom-saved-selection-list "
+            "[class*='st-key-custom-saved-selection-row-'] "
+            ".stElementContainer[class*='st-key-custom_selections--saved_radio'] {"
+            "position: static !important;"
+            "}"
+            ".st-key-custom-saved-selection-list "
+            "[class*='st-key-custom-saved-selection-row-'] "
+            "[data-testid='stRadioOption'] {"
+            "position: absolute; inset: 0; width: 100%; height: 100%; "
+            "z-index: 2; display: flex; align-items: center; padding-left: 0.4rem;"
+            "}"
+            ".st-key-custom-saved-selection-list "
+            "[class*='st-key-custom-saved-selection-row-'] "
+            "[data-testid='stColumn']:not(:first-child) { pointer-events: none; }"
+            ".st-key-custom-saved-selection-list "
+            "[class*='st-key-custom-saved-selection-row-']:hover "
+            "[data-testid='stRadioOption'] { cursor: pointer; }"
+            ".st-key-custom-saved-selection-list "
+            "[class*='st-key-custom-saved-selection-row-'] [data-testid='stRadioOption'] "
+            "[data-testid='stMarkdownContainer'] {"
+            "position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; "
+            "overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;"
+            "}"
+            ".st-key-custom-saved-selection-list "
+            ".st-key-custom-saved-selection-row-selected { background: #eef3fb; }"
             "</style>",
             unsafe_allow_html=True,
         )
         with st.container(key="custom-saved-selection-list"):
-            st.radio(
-                "Active rule",
-                options=rule_ids,
-                index=None,
-                format_func=lambda rule_id: (
-                    f"**{rule_by_id[rule_id]['name']}** | "
-                    f"{rule_summary(rule_by_id[rule_id])} | "
-                    f"Matches: {len(rule_matches.get(rule_id, []))} / "
-                    f"{len(eligible_case_codes)} cases"
-                ),
-                key=radio_key,
-                width="stretch",
-            )
+            header = st.columns([0.05, 0.24, 0.53, 0.18], gap="small")
+            header[1].markdown("**Name**")
+            header[2].markdown("**Rule summary**")
+            header[3].markdown("**Matches**")
+            st.divider()
+
+            for index, rule_id in enumerate(rule_ids):
+                rule = rule_by_id[rule_id]
+                row_key = f"{radio_key}::{rule_id}"
+                st.session_state[row_key] = (
+                    rule_id if selected_rule_id == rule_id else None
+                )
+                row_class = (
+                    "custom-saved-selection-row-selected"
+                    if selected_rule_id == rule_id
+                    else f"custom-saved-selection-row-{index}"
+                )
+                with st.container(key=row_class):
+                    radio_col, name_col, summary_col, matches_col = st.columns(
+                        [0.05, 0.24, 0.53, 0.18],
+                        gap="small",
+                        vertical_alignment="center",
+                    )
+                    with radio_col:
+                        st.radio(
+                            f"Select {rule['name']}",
+                            options=[rule_id],
+                            index=0 if selected_rule_id == rule_id else None,
+                            format_func=lambda _, name=rule["name"]: name,
+                            key=row_key,
+                            on_change=_select_saved_selection_radio,
+                            args=(radio_key, rule_id),
+                            label_visibility="collapsed",
+                            width="content",
+                        )
+                    with name_col:
+                        st.markdown(f"**{rule['name']}**")
+                    with summary_col:
+                        st.markdown(rule_summary(rule))
+                    with matches_col:
+                        st.markdown(
+                            f"{len(rule_matches.get(rule_id, []))} / "
+                            f"{len(eligible_case_codes)} cases"
+                        )
+        selected_rule_id = st.session_state[radio_key]
     else:
         st.caption("No saved selections yet. Create one above.")
 
