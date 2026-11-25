@@ -383,8 +383,9 @@ def test_group_tabs_toggle_preserves_case_selection():
     app.checkbox(key="show_group_tabs").uncheck().run()
     assert app.checkbox(key="show_group_tabs").value is False
     assert len(app.tabs) == 0
-    assert len(app.multiselect) == group_count
-    assert len(app.get("plotly_chart")) == group_count * 2
+    assert len(app.multiselect) == 2
+    assert app.multiselect(key=first_group_key).value == first_group_selection
+    assert len(app.get("plotly_chart")) == 4
     assert app.multiselect(key=first_group_key).value == first_group_selection
 
     app.checkbox(key="show_group_tabs").check().run()
@@ -531,6 +532,32 @@ def test_download_dialog_labels_csv_as_case_list_without_mapping():
     assert csv_option.label == "Add CSV case list"
     assert csv_option.value is True
     assert "Description column will be blank" in csv_option.help
+    assert not app.exception
+
+
+def test_reloading_project_workbooks_clears_prepared_chart_archive():
+    app = _dashboard_with_inputs()
+    app.session_state["download_archive_bytes"] = b"stale archive"
+    app.session_state["download_archive_name"] = "stale.zip"
+    app.session_state["download_archive_file_count"] = 1
+    app.session_state["download_archive_thd_omissions"] = []
+    app.session_state["download_archive_signature"] = "stale signature"
+
+    reload_button = next(
+        button for button in app.button if button.label == "Reload project workbooks"
+    )
+    reload_button.click().run()
+
+    assert all(
+        key not in app.session_state
+        for key in (
+            "download_archive_bytes",
+            "download_archive_name",
+            "download_archive_file_count",
+            "download_archive_thd_omissions",
+            "download_archive_signature",
+        )
+    )
     assert not app.exception
 
 

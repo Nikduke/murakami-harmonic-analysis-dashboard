@@ -24,7 +24,7 @@ The role prefixes are case-insensitive. The app classifies files by their own na
 
 The app does not extract ZIP files. It ignores non-Excel files, `__MACOSX` entries, and Excel lock files beginning with `~$`. An archive can contain up to 100 entries and 100 MiB of uncompressed content. Duplicate workbook basenames in the uploaded set block analysis because the app cannot identify the intended source reliably.
 
-An uploaded mapping workbook replaces local mapping files for the session. Uploaded limit and result workbooks are added to local choices. An upload with the same filename takes precedence over its local counterpart. **Clear uploaded files** removes session uploads and returns to local files. **Reload project workbooks** clears the data cache and scans local files again; it keeps current uploads. Neither action changes files on disk.
+An uploaded mapping workbook replaces local mapping files for the session. Uploaded limit and result workbooks are added to local choices. An upload with the same filename takes precedence over its local counterpart. **Clear uploaded files** removes session uploads and returns to local files. **Reload project workbooks** clears the data cache and scans local files again; it keeps current uploads and clears any prepared chart ZIP. Neither action changes files on disk.
 
 ## Workbook structure
 
@@ -66,7 +66,7 @@ The left **Analysis setup** column contains workbook upload and source controls,
 
 When there are five or fewer options, dataset, location, and limit choices appear as single-choice lists. Larger lists use searchable selectors.
 
-With a mapping workbook, the live view shows each standard group, **All**, **Unmapped** when needed, and **Custom selections**. Without mapping, it shows **All** and **Custom selections**. Turn off **Show groups as tabs** to stack the sections. The active tab is rendered; stacked mode renders all sections.
+With a mapping workbook, the live view shows each standard group, **All**, **Unmapped** when needed, and **Custom selections**. Without mapping, it shows **All** and **Custom selections**. Turn off **Show groups as tabs** to stack the sections. The active tab is rendered; stacked mode renders open sections only.
 
 Case selection state is kept separately for each dataset, location, and group. Clicking a spectrum point focuses that case in the case selector. Shift-click the selected point to restore all cases in that group. Case colours remain assigned from the full group order, so filtering does not reassign colours.
 
@@ -125,9 +125,9 @@ The ZIP contains spectrum PNGs and, when enabled and complete, THD PNGs. It can 
 
 For mapped data, standard export groups are the four known groups and **Unmapped** when needed. **All** is a live comparison view, not a separate standard export group. Without mapping, the export uses one **Cases** group containing codes shared across the selected locations.
 
-With folder organisation enabled, files use `dataset/location/group/` folders. Otherwise, filenames identify the dataset, location, group, and chart type. Duplicate output paths receive numeric suffixes. ZIP PNG export uses a fixed 1400 × 505 px canvas at 2× render scale, producing 2800 × 1010 px images independent of the user's display resolution. Local PNG rendering requires Chrome or Chromium through Kaleido.
+With folder organisation enabled, files use `dataset/location/group/` folders. Otherwise, filenames identify the dataset, location, group, and chart type. Duplicate output paths receive numeric suffixes. ZIP PNG export uses a fixed 1400 × 505 px canvas at 2× render scale, producing 2800 × 1010 px images independent of the user's display resolution. Local PNG rendering requires Chrome or Chromium through Kaleido. Streamlit Community Cloud is configured to install Chromium through `packages.txt`, but the latest documented hosted check did not verify ZIP rendering; confirm it on the deployed revision after dependency rebuilds.
 
-The dialog reports preparation progress, completion, errors, clipped values, and THD omissions. The prepared ZIP stays in the current session until the dialog state is cleared or the session ends.
+The dialog reports preparation progress, completion, errors, clipped values, and THD omissions. The prepared ZIP stays in the current session until its settings or source workbooks change, project workbooks are reloaded, or the session ends.
 
 ## Validation and status behaviour
 
@@ -147,6 +147,7 @@ The **Data validation and sources** expander lists workbook sources and validati
 | `01_App/data_loader.py` | Local discovery, upload and ZIP expansion, and Excel parsing |
 | `01_App/validation.py` | Structural checks for mapping, result, and limit workbooks |
 | `01_App/plotting.py` | Harmonic-order alignment, THD calculation, and Plotly figures |
+| `01_App/chart_selection.py` | Converts Plotly point selections into case codes and restores group selection when cleared |
 | `01_App/custom_selections.py` | Rule matching, naming, validation, and JSON portability |
 | `01_App/custom_selection_ui.py` | Custom selection editor, saved-selection table with radio selection, and session actions |
 | `01_App/chart_export.py` | PNG rendering, safe filenames, optional case CSVs, and ZIP writing |

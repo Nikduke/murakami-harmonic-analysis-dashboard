@@ -18,6 +18,7 @@ from data_loader import (
     load_result_workbook,
     matched_conditions,
     merge_uploaded_workbooks,
+    workbook_source_version,
 )
 from plotting import (
     CASE_COLORS,
@@ -65,6 +66,24 @@ def _zip_bytes(members: dict[str, bytes]) -> bytes:
         for name, content in members.items():
             archive.writestr(name, content)
     return buffer.getvalue()
+
+
+def test_workbook_source_version_tracks_local_and_uploaded_content(tmp_path):
+    path = tmp_path / "result.xlsx"
+    path.write_bytes(b"old")
+    local_version = workbook_source_version(path)
+    original_stat = path.stat()
+
+    path.write_bytes(b"new")
+    os.utime(
+        path,
+        ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns + 1_000_000),
+    )
+    assert workbook_source_version(path) != local_version
+
+    original_upload = UploadedWorkbook("result.xlsx", b"old")
+    changed_upload = UploadedWorkbook("result.xlsx", b"new")
+    assert workbook_source_version(changed_upload) != workbook_source_version(original_upload)
 
 
 def test_discovery_and_mapping_regression():

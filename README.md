@@ -6,7 +6,8 @@ The dashboard reviews harmonic-voltage distortion spectra from Excel workbooks, 
 
 - [Current application reference](01_App/Docs/APP_REFERENCE.md) — implemented functionality, workbook rules, calculations, session behaviour, and exports.
 - [Documentation index](01_App/Docs/DOCUMENTATION_INDEX.md) — purpose and authority of each project document.
-- [User guide](01_App/Docs/User_Guide/Harmonic_Analysis_Dashboard_User_Guide.pdf) — operating steps with screenshots.
+- [Latest illustrated user guide (Word)](01_App/Docs/User_Guide/Harmonic_Analysis_Dashboard_User_Guide_MPE_Figure_Clarity_Updated.docx) — the latest figure-clarity revision, reviewed on 24 October 2026.
+- [Earlier user guide (PDF)](01_App/Docs/User_Guide/Harmonic_Analysis_Dashboard_User_Guide.pdf) — an older edition; it is not synchronised with the latest Word guide.
 - [Original V1 prompt](01_App/Docs/codex_prompt_murakami_harmonics_streamlit_v1_2026-10-02.md) — historical initial requirements and rationale.
 - [Application audit backlog](APPLICATION_AUDIT_BACKLOG.md) — previous audit evidence and pending ideas; proposals do not describe current behaviour.
 
@@ -18,7 +19,7 @@ The **Custom selections** tab (or section in stacked mode) lets you save filters
 
 Choose the active result dataset, busbar/location, and limit series in the **Analysis setup** sidebar. Up to five choices appear as visible single-choice lists; larger lists use searchable selectors. Locations update with the selected dataset, and limit series update with the selected limit workbook and location. A newly selected location starts with the current limit series; each location then remembers its own choice.
 
-For operating instructions with screenshots, see the [User Guide (PDF)](01_App/Docs/User_Guide/Harmonic_Analysis_Dashboard_User_Guide.pdf) or the [editable Word guide](01_App/Docs/User_Guide/Harmonic_Analysis_Dashboard_User_Guide.docx).
+For the latest operating instructions and screenshots, use the [latest Word guide](01_App/Docs/User_Guide/Harmonic_Analysis_Dashboard_User_Guide_MPE_Figure_Clarity_Updated.docx). The checked-in PDF and unsuffixed Word file are earlier editions.
 
 The original V1 prompt is retained for historical context. Use the [current application reference](01_App/Docs/APP_REFERENCE.md) for implemented behaviour.
 
@@ -28,14 +29,15 @@ The original V1 prompt is retained for historical context. Use the [current appl
 - `01_App/data_loader.py` — workbook discovery and Excel parsing.
 - `01_App/validation.py` — mapping, result, and limit validation.
 - `01_App/plotting.py` — order-aligned data preparation and Plotly figures.
+- `01_App/chart_selection.py` — maps Plotly point selections to case codes.
 - `01_App/chart_export.py` — PNG rendering and ZIP archive generation.
 - `01_App/custom_selections.py` and `01_App/custom_selection_ui.py` — deterministic description matching, rule validation/JSON portability, and the session-scoped custom-selection controls.
-- `01_App/assets/mpe_app_wordmark.png` — page-header MPE logo, rendered at 140 px wide from a 420 × 139 px PNG (3× display density); resampled from `Temp/11 - MPE Logo/MPE_Logo_high_quality.png`.
+- `01_App/assets/mpe_app_wordmark.png` — page-header MPE logo, rendered at 140 px wide from a 420 × 139 px PNG (3× display density).
 - `01_App/assets/mpe_app_icon.png` — 128 × 128 px MPE icon used for the browser tab.
-- `01_App/Input_files/` — mapping, limit, and result workbooks. Replace files here outside the app.
+- `01_App/Input_files/` — empty in a clean checkout. Place local mapping, limit, or result workbooks here for automatic discovery, or upload them in the app.
 - `01_App/tests/` — regression, UI-state, custom-selection, and dynamic-harmonic tests.
 - `01_App/requirements.txt` — runtime dependencies, also used by Streamlit Community Cloud.
-- `.streamlit/config.toml` — light theme colors based on the preliminary results presentation.
+- `.streamlit/config.toml` — light theme colours using the dashboard's MPE palette.
 - `01_App/run_app.bat` — Windows launcher for the dedicated Conda environment.
 
 ## Set up the environment
@@ -73,7 +75,7 @@ The app discovers files in `01_App/Input_files/` using these filename convention
 
 Open **Add Excel workbooks** in the sidebar to upload individual `.xlsx` workbooks, one or more `.zip` bundles, or a mix. A ZIP may contain workbooks at its root or in subfolders; the app classifies each `.xlsx` member by its own filename and reads it in memory without extracting it to disk. Other archive files, `__MACOSX` entries, and Excel lock files are ignored. Archives are limited to 100 entries and 100 MiB of total uncompressed contents. Invalid or encrypted archives show an error, and duplicate workbook basenames across the uploaded set must be resolved before analysis. A result dataset is required; mapping and limits are optional. Without a mapping workbook, result cases appear by their exact column names without group or description details. With a mapping workbook, unmatched result codes remain plottable and appear under **Unmapped** and **All**; their codes are preserved and no group or description is inferred. In the included case-description CSV, they are labeled `No mapping entry`. Structural result errors still block plotting. The popover lists recognized workbooks and their roles; the sidebar keeps compact role counts and the clear action visible. Uploaded workbooks stay in the current browser session and are parsed in memory. An uploaded mapping workbook replaces the local mapping for that session; uploaded limits and result datasets are added to the local choices, and an upload with the same filename takes precedence over its local counterpart.
 
-Use **Download charts** in the left **Analysis setup** controls to prepare a ZIP of selected harmonic spectra, optional THD charts, and optional case-description CSVs (included by default). Plotted data remains available from each chart's **Download plotted data (CSV)** button and is not added to the ZIP. Choose locations, groups, and cases separately for each result dataset; each location shows its workbook row count. Then choose a limit series for each selected location. The live view remembers a separate limit selection for each location, initializing a new location from the currently active series; the export uses one choice per location across selected datasets. PNG export uses Kaleido 1.4 and requires Chrome or Chromium on the machine running the app. The repository-root `packages.txt` installs Chromium on Streamlit Community Cloud; the local Windows setup uses installed Google Chrome.
+Use **Download charts** in the left **Analysis setup** controls to prepare a ZIP of selected harmonic spectra, optional THD charts, and optional case-description CSVs (included by default). Plotted data remains available from each chart's **Download plotted data (CSV)** button and is not added to the ZIP. Choose locations, groups, and cases separately for each result dataset; each location shows its workbook row count. Then choose a limit series for each selected location. The live view remembers a separate limit selection for each location, initializing a new location from the currently active series; the export uses one choice per location across selected datasets. PNG export uses Kaleido 1.4 and requires Chrome or Chromium on the machine running the app. The repository-root `packages.txt` requests Chromium on Streamlit Community Cloud; the local Windows setup uses installed Google Chrome.
 
 Within each dataset section, saved rules start selected under **Additional custom chart sets**; clear any rules you do not want. A selected rule adds charts alongside the standard group charts. It matches mapped case descriptions among cases available at all selected locations and adds one chart per selected location; rules with no matches are skipped. The ZIP includes only rules that produced charts in `custom_selections.json`; import that file through **Upload selections** to reuse them. When case CSVs are enabled, each chart's CSV lists its exact cases.
 
@@ -97,4 +99,6 @@ Tests use the supplied workbooks as regression fixtures and a synthetic dataset 
 
 ## Streamlit Community Cloud
 
-The app uses paths relative to `01_App`, so its input folder is resolved beside `app.py`. For deployment, choose `01_App/app.py` as the entrypoint and keep the app's `requirements.txt` beside it. The repository-root `packages.txt` installs Chromium, which Kaleido uses to render PNGs for chart ZIP exports. Changing `packages.txt` triggers a Cloud dependency rebuild; use ZIP export after that rebuild finishes. Add at least one result workbook to the deployed repository's `01_App/Input_files/` folder; mapping and limits workbooks are optional. Configure access through the hosting platform; the app has no custom authentication or secrets.
+The app uses paths relative to `01_App`, so its input folder is resolved beside `app.py`. For deployment, choose `01_App/app.py` as the entrypoint and keep the app's `requirements.txt` beside it. The repository-root `packages.txt` requests Chromium, which Kaleido uses to render PNGs for chart ZIP exports. Cloud logs confirm that the current deployment installed packages from this file; ZIP image rendering still needs a live export check.
+
+The deployed app is currently [public and searchable](https://murakami-harmonic-analysis-dashboardgit.streamlit.app/). It starts without preloaded workbooks. Upload at least one result workbook (`Total distortion*.xlsx`) or a ZIP bundle containing it. Mapping (`Cases_description*.xlsx`) and limit (`Limits_*.xlsx`) workbooks are optional. Source workbooks and exported CSV data are not committed to this repository. The app has no custom authentication or secrets; manage its visibility in Streamlit Community Cloud.

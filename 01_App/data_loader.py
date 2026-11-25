@@ -32,6 +32,14 @@ class UploadedWorkbook:
 WorkbookSource: TypeAlias = Path | UploadedWorkbook
 
 
+def workbook_source_version(source: WorkbookSource) -> tuple[str, int, int]:
+    """Return a session-stable version key for a local or uploaded workbook."""
+    if isinstance(source, UploadedWorkbook):
+        return source.name, len(source.content), hash(source.content)
+    stat = source.stat()
+    return str(source), stat.st_mtime_ns, stat.st_size
+
+
 @dataclass(frozen=True)
 class InputFiles:
     mapping: list[WorkbookSource]

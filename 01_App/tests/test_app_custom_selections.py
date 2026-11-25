@@ -7,7 +7,6 @@ from custom_selection_ui import (
     SAVED_SELECTION_RADIO_KEY_PREFIX,
     custom_case_selection_key,
     custom_case_widget_key,
-    render_custom_selection_manager,
 )
 from custom_selections import matching_case_codes, new_rule, serialise_library
 from data_loader import load_mapping
@@ -280,6 +279,17 @@ def test_no_matches_has_no_stale_charts_and_stacked_layout_exposes_custom_view()
     )
     assert len(app.tabs) == 0
     assert app.button(key="custom_new_selection") is not None
+    assert not app.exception
+
+
+def test_stacked_layout_renders_only_open_group_charts():
+    app = _custom_dashboard()
+    chart_groups = {
+        chart.key.rsplit("::", 1)[-1]
+        for chart in app.get("plotly_chart")
+    }
+
+    assert chart_groups == {"Intact", "Custom selections"}
     assert not app.exception
 
 

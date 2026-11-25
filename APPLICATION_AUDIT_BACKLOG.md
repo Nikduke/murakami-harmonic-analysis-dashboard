@@ -287,15 +287,13 @@ P1 and P2 are implemented and documented below. P1's calculation verification re
 
 **Implementation:** Chart ZIPs contain the selected spectrum PNGs, optional THD PNGs, and optional `case_descriptions.csv` files. The separate **Download plotted data (CSV)** action remains available below each live chart.
 
-### [UX8 · P1 · Candidate] Restore the red limit dash in the hover marker column
+### [UX8 · P1 · Implemented; visual recheck recommended] Show the red limit dash in the hover marker column
 
-**Finding:** The latest supplied hover screenshot shows the colored case dots in the left marker column and the limit entry last, but the limit entry has no red dash beside it. In `plotting.py`, the visible red limit trace is skipped by hover; a separate hover-proxy trace supplies the limit value with marker opacity set to zero. That proxy is the likely reason its glyph is missing.
+**Implementation:** The limit hover row uses a red dash in the marker column, aligned with the case dots, and remains last in the hover. The regression test `test_limit_hover_row_is_last_and_uses_aligned_red_dash_symbol` verifies the hover ordering and symbol.
 
-**Proposal:** Keep the limit as the last hover row and render its red horizontal dash in the same left marker column used by the case dots. Do not place a dash in the text label or change the plotted limit bars/dashes.
+**Remaining check:** A fresh browser visual check at 4, 22, and 92 selected cases is still recommended. The older screenshot finding below is historical and does not describe the current code.
 
-**Acceptance check:** A fresh live hover at 4, 22, and 92 selected cases shows one red dash aligned with the colored case-dot column; the limit value remains last, and each case still appears once in descending value order.
-
-## Code and visual audit — current review (2026-10-05)
+## Code and visual audit — review snapshot (2026-10-05)
 
 **Scope:** Reviewed the project instructions and specification, Streamlit/data-visualization guidance, workbook discovery/loading, validation, plotting, ZIP export, UI orchestration, documentation, and tests. No application behavior or source workbook was changed. The audit backlog and its out-of-date rendering note were updated.
 
@@ -305,7 +303,7 @@ P1 and P2 are implemented and documented below. P1's calculation verification re
 
 **Optimisation decision:** No measured interactive bottleneck justifies changing the data or plotting pipeline for the current and tested workloads. Workbook parsing is cached with bounded entry counts; inactive tabs skip plot construction; discovery is cheap; validation of all three current locations is about 31 ms, and harmonic figure construction is about 79 ms per group. THD preparation and figure construction add about 28 ms. ZIP image rendering is the slowest single operation, but the current one-combination export is small and progress is shown. Revisit export speed only if real multi-combination exports feel slow. Cache limits are by entry count rather than total bytes, so large uploaded ZIPs could use substantial process memory; this is a scale watch, not a demonstrated issue with the current ~0.4 MB input set.
 
-**Visual review:** The current code keeps dataset conditions, location, and limit context separate; places the group label inline with tabs; uses explicit dark Plotly text on white charts; and preserves requested marker/limit semantics. Existing open visual candidates UX3, UX4, and UX6 become more relevant with 92-case datasets. UX8 records the missing hover dash visible in the supplied screenshot. The currently disconnected browser prevented checking whether the screenshot also predates recent selector/layout changes.
+**Visual review at the time:** The code kept dataset conditions, location, and limit context separate; placed the group label inline with tabs; used explicit dark Plotly text on white charts; and preserved requested marker/limit semantics. UX3, UX4, and UX6 were open visual candidates. The supplied screenshot appeared to lack the limit hover dash; later code and regression coverage implement it, as recorded under UX8. The browser was disconnected during this review, so no fresh visual check was possible then.
 
 **Confirmed no-change findings:**
 

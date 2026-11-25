@@ -35,6 +35,7 @@ from data_loader import (
     load_result_workbook,
     matched_conditions,
     merge_uploaded_workbooks,
+    workbook_source_version,
 )
 from plotting import (
     CASE_COLORS,
@@ -123,8 +124,8 @@ def _load_cached(loader, source: WorkbookSource):
             "_cached_limits": "load_limits",
         }[loader.__name__]
         return _cached_uploaded_workbook(loader_name, source.name, source.content)
-    stat = source.stat()
-    return loader(str(source), stat.st_mtime_ns, stat.st_size)
+    path, modified_ns, size = workbook_source_version(source)
+    return loader(path, modified_ns, size)
 
 
 def _dataset_y_axis_key(base_key: str, dataset_name: str) -> str:
@@ -154,6 +155,17 @@ def _reset_analysis_selections() -> None:
         ) or key == CASE_CONTEXT_KEY:
             del st.session_state[key]
     st.session_state["show_chart_download_dialog"] = False
+
+
+def _clear_prepared_chart_archive() -> None:
+    for key in (
+        "download_archive_bytes",
+        "download_archive_name",
+        "download_archive_file_count",
+        "download_archive_thd_omissions",
+        "download_archive_signature",
+    ):
+        st.session_state.pop(key, None)
 
 
 def _remember_limit_series(
@@ -407,14 +419,6 @@ def _location_option_label(value: str, result_sheets: dict[str, pd.DataFrame]) -
     return f"{value} — {len(result_sheets[value])} rows"
 
 
-def _dropdown_option_label(value: object) -> str:
-    if value == SELECT_ALL_OPTION:
-        return "Select all"
-    if value == CLEAR_ALL_OPTION:
-        return "Clear all"
-    return getattr(value, "name", str(value))
-
-
 def _result_dataset_option_labels(
     sources: list[WorkbookSource], conditions: pd.DataFrame
 ) -> dict[str, str]:
@@ -640,6 +644,7 @@ with st.sidebar:
         ),
     ):
         st.cache_data.clear()
+        _clear_prepared_chart_archive()
         st.rerun()
 
 for message in upload_expansion.archive_errors:
@@ -1251,26 +1256,17 @@ def render_chart_download_dialog() -> None:
         valid_datasets = [dataset for dataset in stored_datasets if dataset in dataset_options]
         if valid_datasets != stored_datasets:
             st.session_state[dataset_key] = valid_datasets
-        selected_datasets = st.multiselect(
-            "Result datasets",
-            options=[SELECT_ALL_OPTION, CLEAR_ALL_OPTION, *dataset_options],
-            format_func=lambda source: _result_dataset_option_label(source, result_dataset_labels),
-            select_all=False,
-            key=dataset_key,
-            on_change=_handle_multiselect_dropdown_action,
-            args=(dataset_key, dataset_options),
-        )
     else:
-        selected_datasets = st.multiselect(
-            "Result datasets",
-            options=[SELECT_ALL_OPTION, CLEAR_ALL_OPTION, *dataset_options],
-            default=dataset_options,
-            format_func=lambda source: _result_dataset_option_label(source, result_dataset_labels),
-            select_all=False,
-            key=dataset_key,
-            on_change=_handle_multiselect_dropdown_action,
-            args=(dataset_key, dataset_options),
-        )
+        st.session_state[dataset_key] = dataset_options.copy()
+    selected_datasets = st.multiselect(
+        "Result datasets",
+        options=[SELECT_ALL_OPTION, CLEAR_ALL_OPTION, *dataset_options],
+        format_func=lambda source: _result_dataset_option_label(source, result_dataset_labels),
+        select_all=False,
+        key=dataset_key,
+        on_change=_handle_multiselect_dropdown_action,
+        args=(dataset_key, dataset_options),
+    )
     if not selected_datasets:
         st.info("Select at least one result dataset to prepare a chart set.")
         return
@@ -1355,6 +1351,8 @@ def render_chart_download_dialog() -> None:
         ]
         if location_key in st.session_state and selected_locations_for_summary != stored_locations:
             st.session_state[location_key] = selected_locations_for_summary
+        elif location_key not in st.session_state:
+            st.session_state[location_key] = selected_locations_for_summary.copy()
 
         group_cases = _export_group_cases(
             dataset_sheets,
@@ -1477,28 +1475,15 @@ def render_chart_download_dialog() -> None:
                         for token, description in dataset_conditions
                     )
                 )
-            if location_key in st.session_state:
-                stored_locations = st.session_state[location_key]
-                selected_locations = st.multiselect(
-                    "Locations",
-                    options=[SELECT_ALL_OPTION, CLEAR_ALL_OPTION, *location_options],
-                    format_func=lambda value: _location_option_label(value, dataset_sheets),
-                    select_all=False,
-                    key=location_key,
-                    on_change=_handle_multiselect_dropdown_action,
-                    args=(location_key, location_options),
-                )
-            else:
-                selected_locations = st.multiselect(
-                    "Locations",
-                    options=[SELECT_ALL_OPTION, CLEAR_ALL_OPTION, *location_options],
-                    default=location_options,
-                    format_func=lambda value: _location_option_label(value, dataset_sheets),
-                    select_all=False,
-                    key=location_key,
-                    on_change=_handle_multiselect_dropdown_action,
-                    args=(location_key, location_options),
-                )
+            selected_locations = st.multiselect(
+                "Locations",
+                options=[SELECT_ALL_OPTION, CLEAR_ALL_OPTION, *location_options],
+                format_func=lambda value: _location_option_label(value, dataset_sheets),
+                select_all=False,
+                key=location_key,
+                on_change=_handle_multiselect_dropdown_action,
+                args=(location_key, location_options),
+            )
             locations_by_dataset[dataset.name] = selected_locations
 
             for location in selected_locations:
@@ -1519,28 +1504,17 @@ def render_chart_download_dialog() -> None:
 
             if group_options:
                 group_key = f"download_groups::{dataset.name}"
-                if group_key in st.session_state:
-                    stored_groups = st.session_state[group_key]
-                    selected_groups = st.multiselect(
-                        "Case groups",
-                        options=[SELECT_ALL_OPTION, CLEAR_ALL_OPTION, *group_options],
-                        format_func=_case_option_label,
-                        select_all=False,
-                        key=group_key,
-                        on_change=_handle_multiselect_dropdown_action,
-                        args=(group_key, group_options),
-                    )
-                else:
-                    selected_groups = st.multiselect(
-                        "Case groups",
-                        options=[SELECT_ALL_OPTION, CLEAR_ALL_OPTION, *group_options],
-                        default=group_options,
-                        format_func=_case_option_label,
-                        select_all=False,
-                        key=group_key,
-                        on_change=_handle_multiselect_dropdown_action,
-                        args=(group_key, group_options),
-                    )
+                if group_key not in st.session_state:
+                    st.session_state[group_key] = group_options.copy()
+                selected_groups = st.multiselect(
+                    "Case groups",
+                    options=[SELECT_ALL_OPTION, CLEAR_ALL_OPTION, *group_options],
+                    format_func=_case_option_label,
+                    select_all=False,
+                    key=group_key,
+                    on_change=_handle_multiselect_dropdown_action,
+                    args=(group_key, group_options),
+                )
             else:
                 selected_groups = []
                 if selected_locations:
@@ -2039,6 +2013,20 @@ def render_chart_download_dialog() -> None:
         )
 
     signature_data = {
+        "source_versions": {
+            "mapping": (
+                workbook_source_version(files.mapping[0]) if files.mapping else None
+            ),
+            "datasets": {
+                dataset.name: workbook_source_version(dataset)
+                for dataset in selected_datasets
+            },
+            "limit": (
+                workbook_source_version(export_limit_source)
+                if export_limit_source
+                else None
+            ),
+        },
         "datasets": [
             {
                 "name": dataset.name,
@@ -2089,10 +2077,7 @@ def render_chart_download_dialog() -> None:
     }
     signature = json.dumps(signature_data, sort_keys=True)
     if st.session_state.get("download_archive_signature") != signature:
-        st.session_state.pop("download_archive_bytes", None)
-        st.session_state.pop("download_archive_name", None)
-        st.session_state.pop("download_archive_file_count", None)
-        st.session_state.pop("download_archive_thd_omissions", None)
+        _clear_prepared_chart_archive()
 
     can_prepare = bool(export_plan) and not invalid_selected_locations
     prepare_clicked = st.button(
@@ -2109,17 +2094,13 @@ def render_chart_download_dialog() -> None:
                 progress_bar = st.progress(0.0, text="Preparing selected charts…")
                 total_groups = len(export_plan)
                 def export_items():
-                    loaded_dataset: WorkbookSource | None = None
-                    dataset_sheets: dict[str, pd.DataFrame] = {}
                     for plan_index, (
                         dataset,
                         location,
                         group,
                         selected_cases,
                     ) in enumerate(export_plan):
-                        if dataset != loaded_dataset:
-                            dataset_sheets = _load_cached(_cached_results, dataset)
-                            loaded_dataset = dataset
+                        dataset_sheets = result_sheets_by_dataset[dataset.name]
                         group_data = build_group_data(
                             dataset_sheets[location],
                             selected_cases,
@@ -2304,6 +2285,7 @@ else:
             expanded=(
                 group in {"Intact", "Custom selections"} or not files.mapping
             ),
+            on_change="rerun",
         )
         for group, _, _ in case_groups
     ]
@@ -2311,7 +2293,7 @@ else:
 for (group, group_rows, group_case_codes), group_container in zip(
     case_groups, group_containers
 ):
-    if show_group_tabs and not group_container.open:
+    if not group_container.open:
         continue
     with group_container:
         is_custom_selection = group == "Custom selections"

@@ -22,3 +22,4 @@
 - Update `README.md` when setup, dependencies, input locations, or run commands change. Keep paths relative in project documentation.
 - Update `01_App/Docs/APP_REFERENCE.md` when implemented functionality, data flow, calculations, state, or export behaviour changes.
 - Keep audit proposals separate from implemented behaviour. Do not implement backlog ideas unless the user selects them.
+- Keep the Graphify relationship graph at the repository root in `graphify-out/`. For scans of `01_App`, use `--code-only` so local workbooks and document-derived data are not extracted. Do not leave a second `01_App/graphify-out/` directory. Keep only the graph, HTML visualisation, report, and curated labels as shareable outputs; ignore caches, manifests, converted files, memory, and reflection data.
